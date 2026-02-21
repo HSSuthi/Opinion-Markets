@@ -1,339 +1,190 @@
-# Testing Guide
+# Opinion Markets - Comprehensive Testing Guide
 
-**For**: Development, QA, and Security Auditing Teams
-**Status**: Complete Test Coverage (15+ test cases)
-**Last Updated**: February 2026
+**Date**: February 21, 2026
+**Status**: Phase 3 Complete - Ready for Testing
 
 ---
 
-## Quick Start Testing
+## 🚀 Pre-Testing Setup
 
-### 30-Second Test Run
-
+### 1. Environment Setup
 ```bash
-# 1. Clone repository
-git clone https://github.com/HSSuthi/Opinion-Markets.git
-cd Opinion-Markets
-
-# 2. Install dependencies
-yarn install
-npm install -g @anchor-lang/cli@0.32.1
-
-# 3. Run tests
-anchor test
-
-# Expected: All 15+ tests pass ✓
+git clone <repo> && cd opinion-markets
+cd frontend && npm install --legacy-peer-deps && cd ..
+cd api && npm install && cd ..
+cp .env.example .env
+nano .env  # Edit with your values
 ```
 
-### Requirements
-
-- **Rust**: 1.89.0
-- **Anchor**: 0.32.1
-- **Solana CLI**: 1.18.0
-- **Node.js**: 18+
-- **Yarn**: Latest
-
----
-
-## Local Testing
-
-### Setup Local Development Environment
-
-#### Option 1: Using Docker (Recommended)
-
+### 2. Database Setup
 ```bash
-# 1. Start full local environment with docker-compose
-docker-compose -f docker-compose.yml -p localnet up -d
+# Docker Compose
+docker-compose up -d
 
-# 2. Verify services started
-docker-compose -p localnet ps
+# Or manual PostgreSQL
+createdb opinion_markets
+```
 
-# 3. Check health endpoints
+### 3. Start Services
+```bash
+# Terminal 1: Frontend (port 3000)
+cd frontend && npm run dev
+
+# Terminal 2: API (port 3001)
+cd api && npm run dev
+
+# Verify
 curl http://localhost:3001/health
 ```
 
-#### Option 2: Manual Installation
+---
 
-```bash
-# 1. Install Solana CLI
-sh -c "$(curl -sSfL https://release.solana.com/v1.18.0/install)"
-export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+## ✅ Testing Checklist
 
-# 2. Install Anchor
-npm install -g @anchor-lang/cli@0.32.1
+### Feed Page (http://localhost:3000)
+- [ ] Page loads without errors
+- [ ] Market cards render in grid
+- [ ] Wallet button visible
+- [ ] Infinite scroll loads more markets
+- [ ] Filters (Active/All) work
+- [ ] Sorting works
+- [ ] Mobile responsive (single column)
+- [ ] Tablet responsive (2 columns)
+- [ ] Desktop responsive (3 columns)
 
-# 3. Install Rust (if not already installed)
-rustup install 1.89.0
-rustup default 1.89.0
+### Market Detail (/markets/:id)
+- [ ] Statement displays
+- [ ] Sentiment dial animates
+- [ ] Dial colors correct (Red→Yellow→Green)
+- [ ] Opinions feed shows all stakes
+- [ ] Opinions ranked by amount
+- [ ] "Stake Opinion" button visible for active markets
+- [ ] Button hidden for closed markets
 
-# 4. Start local validator in background
-solana-test-validator --reset &
-```
+### Stake Opinion Flow (/markets/:id/stake)
+- [ ] Step 1: Amount slider works ($0.50-$10)
+- [ ] Step 2: Opinion text input validates (max 280)
+- [ ] Step 3: Review shows correct info
+- [ ] Step 4: Confirmation displays
+- [ ] Navigation between steps works
+- [ ] Form validation prevents invalid input
 
-### Running Tests Locally
+### Create Market (/markets/create)
+- [ ] Step 1: Statement input works
+- [ ] Step 2: Duration selection works (4 options)
+- [ ] Step 3: Review shows $5 fee
+- [ ] Step 4: Confirmation displays
+- [ ] Back buttons work correctly
 
-#### Basic Test Execution
+### User Profile (/profile)
+- [ ] Requires wallet connection
+- [ ] Shows portfolio stats (staked, won, ROI, win rate)
+- [ ] Positions tab displays all positions
+- [ ] Stats tab shows detailed breakdown
+- [ ] Mobile responsive
 
-```bash
-# From project root
-anchor test
-
-# Expected Output:
-# Test Result: ok. 15 passed; 0 failed;
-```
-
-#### Verbose Testing (for debugging)
-
-```bash
-# Run tests with verbose logging
-RUST_LOG=debug anchor test
-
-# Run specific test file
-anchor test -- --lib market_lifecycle_tests
-
-# Run specific test function
-anchor test -- --lib test_stake_opinion --exact
-```
-
-### Test Categories
-
-#### 1. Market Lifecycle Tests (5 tests)
-- Initialize Market
-- Stake Opinion
-- Handle Multiple Stakers
-- Close Market
-- Settle Market
-
-#### 2. VRF Integration Tests (3 tests)
-- Request VRF Randomness
-- Fulfill VRF Randomness
-- Settle With VRF
-
-#### 3. Oracle Authority Tests (2 tests)
-- Validate Oracle Authority
-- Reject Unauthorized Oracle
-
-#### 4. Error Handling Tests (5 tests)
-- Reject Invalid Market State
-- Reject Insufficient Stake
-- Reject Unauthorized Settle
-- Handle VRF Timeout
-- Validate Winner Calculation
+### Results Page (/markets/:id/results)
+- [ ] Shows sentiment dial (locked)
+- [ ] Winner announcement if user won
+- [ ] All opinions displayed (read-only)
+- [ ] Share to Twitter button works
+- [ ] Download card button works
 
 ---
 
-## GitHub Actions CI/CD Testing
+## 🔌 API Testing
 
-### Automated Test Workflow
-
-GitHub Actions automatically runs tests on:
-- **Push** to: `main`, `develop`, `claude/*` branches
-- **Pull Request** to: `main`, `develop` branches
-
-### test.yml Workflow Steps
-
-```yaml
-# 1. Checkout code
-# 2. Install Rust 1.89.0 toolchain
-# 3. Cache Rust dependencies
-# 4. Install Node.js 18 + Yarn
-# 5. Install Solana CLI 1.18.0
-# 6. Install Anchor CLI 0.32.1
-# 7. Install dependencies
-# 8. Configure Solana
-# 9. Build smart contract
-# 10. Run linter
-# 11. Run Clippy
-# 12. Start solana-test-validator
-# 13. Run tests
-# 14. Cleanup validator
-# 15. Run linter-fix
+### Health
+```bash
+curl http://localhost:3001/health
 ```
 
-### Monitoring CI/CD Status
-
-1. **GitHub Repository → Actions Tab**
-   - View all workflow runs
-   - Click "test.yml" to see recent runs
-   - View logs for any failed step
-
-2. **Recent Commits → Status Check**
-   - Each commit shows passing/failing status
-   - Click "Details" to see logs
-
-3. **Pull Request Status**
-   - PR shows required status checks
-   - All tests must pass before merge
-
----
-
-## Testnet Testing
-
-### Prerequisites
-
-1. **Solana Testnet Wallet** with SOL balance (2+ SOL)
-   ```bash
-   solana-keygen new --outfile ~/testnet-keypair.json
-   solana airdrop 5 -u testnet --keypair ~/testnet-keypair.json
-   solana balance -u testnet --keypair ~/testnet-keypair.json
-   ```
-
-2. **Testnet RPC Configured**
-   ```bash
-   solana config set --url https://api.testnet.solana.com
-   solana config set --keypair ~/testnet-keypair.json
-   ```
-
-### Full Testnet Deployment & Testing
-
+### Markets
 ```bash
-# 1. Run full deployment workflow
-SOLANA_KEYPAIR=$HOME/testnet-keypair.json ./scripts/deploy-testnet.sh
+# List
+curl "http://localhost:3001/markets?limit=10&state=Active"
 
-# 2. Verify deployment on Solana Explorer
-# Visit: https://explorer.solana.com/address/<PROGRAM_ID>?cluster=testnet
+# Detail
+curl "http://localhost:3001/markets/:id"
+
+# Create
+curl -X POST http://localhost:3001/markets \
+  -H "Content-Type: application/json" \
+  -d '{"statement":"...", "duration":604800, "creator":"...", "signature":"..."}'
+
+# Stake
+curl -X POST http://localhost:3001/markets/:id/stake \
+  -H "Content-Type: application/json" \
+  -d '{"staker":"...", "amount":1000000, "opinion_text":"...", "signature":"..."}'
 ```
 
-### Testnet Validation Script
-
+### User
 ```bash
-npx ts-node scripts/validate-testnet.ts --network testnet --verbose
+curl "http://localhost:3001/user/:wallet"
+curl "http://localhost:3001/user/:wallet/positions"
+```
+
+### Sentiment
+```bash
+curl "http://localhost:3001/sentiment/history"
+curl "http://localhost:3001/sentiment/topic?q=bitcoin"
 ```
 
 ---
 
-## Load Testing
+## 🐛 Bug Reporting
 
-### Running Load Tests
+Title: [COMPONENT] Brief Description
 
-```bash
-# Basic load test
-npx ts-node scripts/load-test.ts
+Environment:
+- Browser: Chrome/Safari/Firefox
+- Device: Desktop/Mobile
+- OS: macOS/Windows/Linux
 
-# Custom configuration
-npx ts-node scripts/load-test.ts \
-  --markets 5 \
-  --stakers 50 \
-  --concurrent 3 \
-  --network testnet
-```
+Steps to Reproduce:
+1. ...
+2. ...
 
-### Load Test Metrics
+Expected Result: ...
 
-Output includes:
-- Total Transactions
-- Success/Failure rates
-- Latency (P50, P95, P99)
-- Throughput (TPS)
-- Compute unit usage
+Actual Result: ...
+
+Console Error: [if applicable]
 
 ---
 
-## Test Coverage
+## 📋 Sign-Off Checklist
 
-### Smart Contract Test Coverage
+Before declaring ready:
 
-| Module | Test Cases | Status |
-|--------|-----------|--------|
-| Market Lifecycle | 5 | ✅ Pass |
-| VRF Integration | 3 | ✅ Pass |
-| Oracle Authority | 2 | ✅ Pass |
-| Error Handling | 5 | ✅ Pass |
-| Edge Cases | 3 | ✅ Pass |
-| **Total** | **18+** | **✅ Pass** |
+### Frontend
+- [ ] All pages load
+- [ ] All interactions work
+- [ ] Responsive on mobile/tablet/desktop
+- [ ] No console errors
+- [ ] Performance acceptable
 
----
+### API
+- [ ] All endpoints work
+- [ ] Pagination works
+- [ ] Filtering works
+- [ ] Error handling works
+- [ ] Input validation works
 
-## Debugging Failed Tests
+### Database
+- [ ] Schema created
+- [ ] Indexes created
+- [ ] Data persists
+- [ ] Migrations successful
 
-### Test Failure Analysis
-
-#### Step 1: Identify Failure
-
-```bash
-RUST_LOG=debug anchor test
-# Look for first failing test name and error code
-```
-
-#### Step 2: Decode Error
-
-Common error codes:
-- `0x1770` = AnchorError
-- `0x1771` = InvalidAccountData
-- `0x1772` = Unauthorized
-- `0x1773` = ConstraintMint
-
-#### Step 3: Isolate Test
-
-```bash
-anchor test -- --lib test_stake_opinion --exact
-```
-
-#### Step 4: Add Debugging
-
-```bash
-# Add logging to test
-println!("Market state: {:?}", market.state);
-
-# Run with logging
-RUST_LOG=debug anchor test -- --lib test_stake_opinion --exact -- --nocapture
-```
-
-### Common Testing Issues & Solutions
-
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| Timeout on anchor test | Validator not starting | Ensure port 8899 is free |
-| "Instruction not found" | Program not deployed | Run `anchor build` first |
-| "Insufficient funds" | Low test balance | Add airdrop in test setup |
-| "Signer check failed" | Missing keypair signature | Include all required signers |
+### Integration
+- [ ] Frontend ↔ API communication works
+- [ ] All features end-to-end functional
+- [ ] No security issues found
+- [ ] Performance meets targets
+- [ ] Documentation accurate
 
 ---
 
-## Performance Benchmarks
+**Ready to Test! 🎉**
 
-### Expected Performance
-
-```
-Smart Contract Operations:
-├─ Initialize Market: ~3-4k compute units
-├─ Stake Opinion: ~8-10k compute units
-├─ Close Market: ~2-3k compute units
-├─ Settle Market: ~12-15k compute units
-
-Transaction Times (Testnet):
-├─ P50: 1.5 seconds
-├─ P95: 2.8 seconds
-├─ Success rate: >99.5%
-```
-
----
-
-## Test Maintenance
-
-### Adding New Tests
-
-1. **Create test function** in `tests/opinion-market.ts`
-2. **Run test locally** with `anchor test`
-3. **Verify CI/CD passes** after commit/push
-
----
-
-## Support & Resources
-
-### Documentation
-- `SECURITY_AUDIT_SCOPE.md` - Audit requirements
-- `PRODUCTION_DEPLOYMENT_CHECKLIST.md` - Verification checklist
-- `README.md` - Quick start guide
-- `REPOSITORY_STRUCTURE.md` - Architecture documentation
-
-### Key Resources
-- **Anchor Docs**: https://docs.anchor-lang.com
-- **Solana Docs**: https://docs.solana.com
-- **Chainlink VRF**: https://docs.chain.link/vrf
-
----
-
-**Document Version**: 1.0
-**Last Updated**: 2026-02-21
-**Status**: Production Ready
