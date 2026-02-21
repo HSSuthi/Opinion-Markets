@@ -6,7 +6,7 @@ resolver = "2"
 
 # Override problematic git dependencies with released versions
 [patch.crates-io]
-base64ct = "1.6"
+base64ct = "=1.8.3"
 
 [profile.release]
 overflow-checks = true
