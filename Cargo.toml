@@ -4,10 +4,6 @@ members = [
 ]
 resolver = "2"
 
-# THIS SECTION FIXES THE EDITION 2024 ERROR
-[patch.crates-io]
-constant_time_eq = { git = "https://github.com/cesarghali/constant_time_eq", rev = "ac6302" }
-base64ct = { git = "https://github.com/RustCrypto/formats", rev = "2f6723" }
 
 [profile.release]
 overflow-checks = true
