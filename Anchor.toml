@@ -11,11 +11,14 @@ opinion_market = "2NaUpg4jEZVGDBmmuKYLdsAfSGKwHxjghhfgVpQvZJYu"
 [programs.devnet]
 opinion_market = "2NaUpg4jEZVGDBmmuKYLdsAfSGKwHxjghhfgVpQvZJYu"
 
+[programs.testnet]
+opinion_market = "2NaUpg4jEZVGDBmmuKYLdsAfSGKwHxjghhfgVpQvZJYu"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "testnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
