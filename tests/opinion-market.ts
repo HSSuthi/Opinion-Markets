@@ -63,17 +63,37 @@ describe("opinion-market", () => {
       6
     );
 
-    const createAndFund = async (owner: anchor.web3.PublicKey, dollars: number) => {
-      const ata = await createAccount(connection, deployer.payer, usdcMint, owner);
-      await mintTo(connection, deployer.payer, usdcMint, ata, deployer.publicKey, dollars * 1_000_000);
+    const createAndFund = async (
+      owner: anchor.web3.PublicKey,
+      dollars: number
+    ) => {
+      const ata = await createAccount(
+        connection,
+        deployer.payer,
+        usdcMint,
+        owner
+      );
+      await mintTo(
+        connection,
+        deployer.payer,
+        usdcMint,
+        ata,
+        deployer.publicKey,
+        dollars * 1_000_000
+      );
       return ata;
     };
 
-    creatorUsdc  = await createAndFund(creator.publicKey,  100);
-    staker1Usdc  = await createAndFund(staker1.publicKey,  50);
-    staker2Usdc  = await createAndFund(staker2.publicKey,  50);
-    staker3Usdc  = await createAndFund(staker3.publicKey,  50);
-    treasuryUsdc = await createAccount(connection, deployer.payer, usdcMint, treasury.publicKey);
+    creatorUsdc = await createAndFund(creator.publicKey, 100);
+    staker1Usdc = await createAndFund(staker1.publicKey, 50);
+    staker2Usdc = await createAndFund(staker2.publicKey, 50);
+    staker3Usdc = await createAndFund(staker3.publicKey, 50);
+    treasuryUsdc = await createAccount(
+      connection,
+      deployer.payer,
+      usdcMint,
+      treasury.publicKey
+    );
 
     [configPda] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("config")],
@@ -136,22 +156,33 @@ describe("opinion-market", () => {
     assert.deepEqual(market.state, { active: {} });
     assert.equal(market.stakerCount, 0);
 
-    const creatorAfter  = await getAccount(connection, creatorUsdc);
+    const creatorAfter = await getAccount(connection, creatorUsdc);
     const treasuryAfter = await getAccount(connection, treasuryUsdc);
-    assert.equal(Number(creatorBefore.amount) - Number(creatorAfter.amount), 5_000_000, "$5 debited from creator");
-    assert.equal(Number(treasuryAfter.amount) - Number(treasuryBefore.amount), 5_000_000, "$5 credited to treasury");
+    assert.equal(
+      Number(creatorBefore.amount) - Number(creatorAfter.amount),
+      5_000_000,
+      "$5 debited from creator"
+    );
+    assert.equal(
+      Number(treasuryAfter.amount) - Number(treasuryBefore.amount),
+      5_000_000,
+      "$5 credited to treasury"
+    );
   });
 
   it("Stakes 3 opinions and accumulates escrow", async () => {
     const stakes = [
       { kp: staker1, ata: staker1Usdc, amount: 10_000_000 }, // $10
-      { kp: staker2, ata: staker2Usdc, amount: 5_000_000  }, // $5
-      { kp: staker3, ata: staker3Usdc, amount: 500_000    }, // $0.50
+      { kp: staker2, ata: staker2Usdc, amount: 5_000_000 }, // $5
+      { kp: staker3, ata: staker3Usdc, amount: 500_000 }, // $0.50
     ];
 
     for (const { kp, ata, amount } of stakes) {
       const textHash = Array.from(
-        crypto.createHash("sha256").update(`Opinion: ${kp.publicKey.toBase58()}`).digest()
+        crypto
+          .createHash("sha256")
+          .update(`Opinion: ${kp.publicKey.toBase58()}`)
+          .digest()
       );
       const [opinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
         [Buffer.from("opinion"), marketPda.toBuffer(), kp.publicKey.toBuffer()],
@@ -184,7 +215,11 @@ describe("opinion-market", () => {
 
   it("Rejects stake below $0.50 minimum", async () => {
     const [opinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("opinion"), marketPda.toBuffer(), oracle.publicKey.toBuffer()],
+      [
+        Buffer.from("opinion"),
+        marketPda.toBuffer(),
+        oracle.publicKey.toBuffer(),
+      ],
       program.programId
     );
     try {
@@ -223,7 +258,10 @@ describe("opinion-market", () => {
 
   it("Rejects record_sentiment from non-oracle", async () => {
     const impostor = anchor.web3.Keypair.generate();
-    const sig = await connection.requestAirdrop(impostor.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    const sig = await connection.requestAirdrop(
+      impostor.publicKey,
+      anchor.web3.LAMPORTS_PER_SOL
+    );
     await connection.confirmTransaction(sig);
 
     try {
@@ -346,11 +384,15 @@ describe("opinion-market", () => {
       .rpc();
 
     // Wait 2 seconds for market to expire
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Try to stake after expiry
     const [expiredOpinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("opinion"), shortMarketPda.toBuffer(), staker1.publicKey.toBuffer()],
+      [
+        Buffer.from("opinion"),
+        shortMarketPda.toBuffer(),
+        staker1.publicKey.toBuffer(),
+      ],
       program.programId
     );
 
@@ -442,10 +484,11 @@ describe("opinion-market", () => {
   it("Rejects invalid market duration", async () => {
     const invalidDurationUuid = Array.from(crypto.randomBytes(16));
     const invalidDurationUuidBuffer = Buffer.from(invalidDurationUuid);
-    const [invalidDurationMarketPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("market"), invalidDurationUuidBuffer],
-      program.programId
-    );
+    const [invalidDurationMarketPda] =
+      anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("market"), invalidDurationUuidBuffer],
+        program.programId
+      );
 
     try {
       await program.methods
@@ -472,7 +515,11 @@ describe("opinion-market", () => {
 
   it("Rejects stake above $10.00 maximum", async () => {
     const [opinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("opinion"), marketPda.toBuffer(), creator.publicKey.toBuffer()],
+      [
+        Buffer.from("opinion"),
+        marketPda.toBuffer(),
+        creator.publicKey.toBuffer(),
+      ],
       program.programId
     );
 
@@ -499,7 +546,11 @@ describe("opinion-market", () => {
 
   it("Rejects IPFS CID > 64 characters", async () => {
     const [opinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("opinion"), marketPda.toBuffer(), treasury.publicKey.toBuffer()],
+      [
+        Buffer.from("opinion"),
+        marketPda.toBuffer(),
+        treasury.publicKey.toBuffer(),
+      ],
       program.programId
     );
 
@@ -559,7 +610,11 @@ describe("opinion-market", () => {
 
     // Stake on the recovery market
     const [recoveryOpinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("opinion"), recoveryMarketPda.toBuffer(), staker1.publicKey.toBuffer()],
+      [
+        Buffer.from("opinion"),
+        recoveryMarketPda.toBuffer(),
+        staker1.publicKey.toBuffer(),
+      ],
       program.programId
     );
 
@@ -579,7 +634,7 @@ describe("opinion-market", () => {
       .rpc();
 
     // Wait for market to close (2 seconds to pass the 1 second duration)
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Try to close the market
     await program.methods
@@ -606,7 +661,9 @@ describe("opinion-market", () => {
         })
         .signers([staker1])
         .rpc();
-      assert.fail("Expected MarketNotExpired error (recovery period not elapsed)");
+      assert.fail(
+        "Expected MarketNotExpired error (recovery period not elapsed)"
+      );
     } catch (e: any) {
       assert.include(e.message, "MarketNotExpired");
     }
@@ -619,14 +676,16 @@ describe("opinion-market", () => {
     // Create another short-duration market
     const recoveryTestUuid = Array.from(crypto.randomBytes(16));
     const recoveryTestUuidBuffer = Buffer.from(recoveryTestUuid);
-    const [recoveryTestMarketPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("market"), recoveryTestUuidBuffer],
-      program.programId
-    );
-    const [recoveryTestEscrowPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("escrow"), recoveryTestMarketPda.toBuffer()],
-      program.programId
-    );
+    const [recoveryTestMarketPda] =
+      anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("market"), recoveryTestUuidBuffer],
+        program.programId
+      );
+    const [recoveryTestEscrowPda] =
+      anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow"), recoveryTestMarketPda.toBuffer()],
+        program.programId
+      );
 
     // Create and stake
     await program.methods
@@ -646,10 +705,15 @@ describe("opinion-market", () => {
       .signers([creator])
       .rpc();
 
-    const [recoveryTestOpinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("opinion"), recoveryTestMarketPda.toBuffer(), staker2.publicKey.toBuffer()],
-      program.programId
-    );
+    const [recoveryTestOpinionPda] =
+      anchor.web3.PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("opinion"),
+          recoveryTestMarketPda.toBuffer(),
+          staker2.publicKey.toBuffer(),
+        ],
+        program.programId
+      );
 
     await program.methods
       .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmRecovery2")
@@ -668,7 +732,10 @@ describe("opinion-market", () => {
 
     // Verify recover_stake instruction exists and validates signer
     // (full balance test would require time-warp)
-    assert.ok(true, "recover_stake instruction callable - full test via BanksClient with time-warp");
+    assert.ok(
+      true,
+      "recover_stake instruction callable - full test via BanksClient with time-warp"
+    );
   });
 
   it("Full settlement flow: record_sentiment then run_lottery", async () => {

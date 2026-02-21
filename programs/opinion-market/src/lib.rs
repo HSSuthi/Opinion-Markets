@@ -253,6 +253,8 @@ pub mod opinion_market {
         token::transfer(cpi_ctx, CREATE_FEE)?;
 
         let clock = Clock::get()?;
+        let market_key = ctx.accounts.market.key();
+        let statement_for_event = statement.clone();
         let market = &mut ctx.accounts.market;
         market.creator = ctx.accounts.creator.key();
         market.uuid = uuid;
@@ -271,9 +273,9 @@ pub mod opinion_market {
         msg!("Market created: closes_at={}", market.closes_at);
 
         emit!(MarketCreatedEvent {
-            market: ctx.accounts.market.key(),
+            market: market_key,
             creator: ctx.accounts.creator.key(),
-            statement: statement.clone(),
+            statement: statement_for_event,
             closes_at: market.closes_at,
             duration_secs,
         });
@@ -310,27 +312,33 @@ pub mod opinion_market {
         );
         token::transfer(cpi_ctx, stake_amount)?;
 
+        let market_key = ctx.accounts.market.key();
+        let staker_key = ctx.accounts.staker.key();
+        let ipfs_cid_for_event = ipfs_cid.clone();
+
         let opinion = &mut ctx.accounts.opinion;
-        opinion.market = ctx.accounts.market.key();
-        opinion.staker = ctx.accounts.staker.key();
+        opinion.market = market_key;
+        opinion.staker = staker_key;
         opinion.stake_amount = stake_amount;
         opinion.text_hash = text_hash;
         opinion.ipfs_cid = ipfs_cid.clone();
         opinion.created_at = clock.unix_timestamp;
         opinion.bump = ctx.bumps.opinion;
 
-        msg!("Opinion staked: staker={} amount={} cid={}", ctx.accounts.staker.key(), stake_amount, ipfs_cid);
+        msg!("Opinion staked: staker={} amount={} cid={}", staker_key, stake_amount, ipfs_cid);
 
         let market = &mut ctx.accounts.market;
         market.total_stake = market.total_stake.saturating_add(stake_amount);
         market.staker_count = market.staker_count.saturating_add(1);
 
+        let total_stake_after = market.total_stake;
+
         emit!(OpinionStakedEvent {
-            market: ctx.accounts.market.key(),
-            staker: ctx.accounts.staker.key(),
+            market: market_key,
+            staker: staker_key,
             stake_amount,
-            ipfs_cid: ipfs_cid.clone(),
-            total_stake_after: market.total_stake,
+            ipfs_cid: ipfs_cid_for_event,
+            total_stake_after,
         });
 
         Ok(())
@@ -339,17 +347,20 @@ pub mod opinion_market {
     /// Close a market after its duration expires. Permissionless.
     pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
         let clock = Clock::get()?;
+        let market_key = ctx.accounts.market.key();
         let market = &mut ctx.accounts.market;
         require!(market.state == MarketState::Active, OpinionError::MarketNotActive);
         require!(clock.unix_timestamp >= market.closes_at, OpinionError::MarketNotExpired);
         market.state = MarketState::Closed;
+        let staker_count = market.staker_count;
+        let total_stake = market.total_stake;
         msg!("Market closed");
 
         emit!(MarketClosedEvent {
-            market: ctx.accounts.market.key(),
+            market: market_key,
             closed_at: clock.unix_timestamp,
-            total_stakers: market.staker_count,
-            total_stake: market.total_stake,
+            total_stakers: staker_count,
+            total_stake,
         });
 
         Ok(())

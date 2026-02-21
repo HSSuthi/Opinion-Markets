@@ -1,8 +1,23 @@
 const markets = [
-  { name: "BTC above $85k by month-end", volume: "$442k", yes: "61¢", no: "39¢" },
+  {
+    name: "BTC above $85k by month-end",
+    volume: "$442k",
+    yes: "61¢",
+    no: "39¢",
+  },
   { name: "SOL ETF approved by June?", volume: "$308k", yes: "34¢", no: "66¢" },
-  { name: "Fed cuts rates in next meeting", volume: "$219k", yes: "29¢", no: "71¢" },
-  { name: "ETH gas below 8 gwei this week", volume: "$182k", yes: "48¢", no: "52¢" },
+  {
+    name: "Fed cuts rates in next meeting",
+    volume: "$219k",
+    yes: "29¢",
+    no: "71¢",
+  },
+  {
+    name: "ETH gas below 8 gwei this week",
+    volume: "$182k",
+    yes: "48¢",
+    no: "52¢",
+  },
 ];
 
 const marketList = document.getElementById("market-list");
