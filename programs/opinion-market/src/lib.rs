@@ -20,6 +20,8 @@ pub const DURATION_24H: u64 = 86_400;
 pub const DURATION_3D: u64 = 259_200;
 pub const DURATION_7D: u64 = 604_800;
 pub const DURATION_14D: u64 = 1_209_600;
+/// Time after market closes before stakers can recover stakes (14 days)
+pub const RECOVERY_PERIOD: i64 = 1_209_600;
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 #[error_code]
@@ -459,6 +461,50 @@ pub mod opinion_market {
 
         Ok(())
     }
+
+    /// Allow stakers to recover their stake if market is abandoned (not settled after 14 days).
+    /// This is an escape hatch mechanism to prevent funds from being locked forever.
+    pub fn recover_stake(ctx: Context<RecoverStake>) -> Result<()> {
+        let clock = Clock::get()?;
+        let market = &ctx.accounts.market;
+
+        // Market must have been closed for at least 14 days
+        require!(
+            clock.unix_timestamp >= market.closes_at + RECOVERY_PERIOD,
+            OpinionError::MarketNotExpired  // Reusing error: not enough time has passed
+        );
+
+        // Only allow recovery from markets that are NOT already settled
+        // (settled markets already distributed funds)
+        require!(
+            market.state != MarketState::Settled,
+            OpinionError::MarketNotActive  // Reusing error: cannot recover from settled market
+        );
+
+        let opinion = &ctx.accounts.opinion;
+        let stake_amount = opinion.stake_amount;
+
+        // Transfer stake from escrow back to staker
+        let market_uuid = market.uuid;
+        let market_bump = market.bump;
+        let seeds: &[&[u8]] = &[b"market", &market_uuid, &[market_bump]];
+        let signer_seeds = &[seeds];
+
+        let recovery_cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.escrow_token_account.to_account_info(),
+                to: ctx.accounts.staker_usdc.to_account_info(),
+                authority: ctx.accounts.market.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::transfer(recovery_cpi, stake_amount)?;
+
+        msg!("Stake recovered: staker={} amount={}", ctx.accounts.staker.key(), stake_amount);
+
+        Ok(())
+    }
 }
 
 // ── Account Contexts ─────────────────────────────────────────────────────────
@@ -647,6 +693,46 @@ pub struct RunLottery<'info> {
         constraint = treasury_usdc.owner == config.treasury @ OpinionError::TreasuryMismatch,
     )]
     pub treasury_usdc: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct RecoverStake<'info> {
+    #[account(mut)]
+    pub staker: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    #[account(
+        seeds = [b"market", market.uuid.as_ref()],
+        bump = market.bump,
+    )]
+    pub market: Account<'info, Market>,
+
+    /// Escrow account holding stakes
+    #[account(
+        mut,
+        seeds = [b"escrow", market.key().as_ref()],
+        bump,
+    )]
+    pub escrow_token_account: Account<'info, TokenAccount>,
+
+    /// The staker's opinion on this market
+    #[account(
+        seeds = [b"opinion", market.key().as_ref(), staker.key().as_ref()],
+        bump = opinion.bump,
+    )]
+    pub opinion: Account<'info, Opinion>,
+
+    /// Staker's USDC token account (receives recovered stake)
+    #[account(
+        mut,
+        constraint = staker_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
+        constraint = staker_usdc.owner == staker.key(),
+    )]
+    pub staker_usdc: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
 }
