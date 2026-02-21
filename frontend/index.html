@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Opinion Markets</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">OM</div>
+        <div>
+          <h1>Opinion Markets</h1>
+          <p>Sentiment Layer on Solana</p>
+        </div>
+      </div>
+      <nav class="nav-links">
+        <a href="#markets">Markets</a>
+        <a href="#portfolio">Portfolio</a>
+        <a href="#activity">Activity</a>
+      </nav>
+      <button class="wallet-btn">Connect Wallet</button>
+    </header>
+
+    <main class="layout">
+      <section class="hero glass">
+        <p class="eyebrow">Devnet Preview</p>
+        <h2>Trade crowd sentiment with <span>instant on-chain settlement</span>.</h2>
+        <p>
+          A sleek market interface inspired by Polymarket and Kalshi—optimized for fast scans, fast clicks, and a clear edge.
+        </p>
+        <div class="hero-actions">
+          <button class="primary">Explore Markets</button>
+          <button class="ghost">How it works</button>
+        </div>
+      </section>
+
+      <aside class="stats glass">
+        <h3>Protocol Snapshot</h3>
+        <div class="stat-grid">
+          <article>
+            <p>Total Volume</p>
+            <strong>$1.84M</strong>
+          </article>
+          <article>
+            <p>Open Interest</p>
+            <strong>$726K</strong>
+          </article>
+          <article>
+            <p>24h Traders</p>
+            <strong>1,294</strong>
+          </article>
+          <article>
+            <p>Avg Spread</p>
+            <strong>1.7%</strong>
+          </article>
+        </div>
+      </aside>
+
+      <section id="markets" class="markets glass">
+        <div class="section-head">
+          <h3>Trending Markets</h3>
+          <div class="filters">
+            <button class="chip active">All</button>
+            <button class="chip">Crypto</button>
+            <button class="chip">Politics</button>
+            <button class="chip">Macro</button>
+          </div>
+        </div>
+        <div id="market-list" class="market-list"></div>
+      </section>
+
+      <section id="portfolio" class="portfolio glass">
+        <h3>My Positions</h3>
+        <div class="position-row">
+          <div>
+            <p>BTC above $85k by month-end</p>
+            <small>YES · 124 shares</small>
+          </div>
+          <strong class="gain">+$412.22</strong>
+        </div>
+        <div class="position-row">
+          <div>
+            <p>SOL ETF approved in Q2</p>
+            <small>NO · 90 shares</small>
+          </div>
+          <strong class="loss">-$74.03</strong>
+        </div>
+      </section>
+
+      <section id="activity" class="activity glass">
+        <h3>Recent Fills</h3>
+        <ul>
+          <li><span>Bought YES · BTC above $85k</span><b>0.61</b></li>
+          <li><span>Sold NO · SOL ETF approved</span><b>0.43</b></li>
+          <li><span>Bought NO · Fed cuts in March</span><b>0.71</b></li>
+        </ul>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
