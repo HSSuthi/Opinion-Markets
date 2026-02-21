@@ -1,0 +1,194 @@
+name: Smart Contract Tests
+
+on:
+  push:
+    branches: [main, develop, "claude/*"]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  RUST_TOOLCHAIN: 1.89.0
+  CARGO_TERM_COLOR: always
+  SOLANA_CLI_VERSION: 1.18.0
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "programs/opinion-market"
+
+      - name: Install Node.js & Yarn
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "yarn"
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/v${SOLANA_CLI_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          solana --version
+
+      - name: Install Anchor CLI
+        run: |
+          npm install -g @anchor-lang/cli@0.32.1
+          anchor --version
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Configure Solana
+        run: |
+          solana config set --url http://127.0.0.1:8899
+
+      - name: Build smart contract
+        run: anchor build
+        env:
+          ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+
+      - name: Check formatting
+        run: yarn run lint
+        continue-on-error: true
+
+      - name: Run Clippy
+        run: cargo clippy --release -- -D warnings
+        working-directory: programs/opinion-market
+        continue-on-error: true
+
+      - name: Run tests with local validator
+        run: |
+          # Start solana-test-validator in background
+          echo "Starting Solana test validator..."
+          solana-test-validator --bpf-program 2NaUpg4jEZVGDBmmuKYLdsAfSGKwHxjghhfgVpQvZJYu target/deploy/opinion_market.so &
+          VALIDATOR_PID=$!
+          sleep 4
+
+          # Wait for validator to be ready
+          for i in {1..10}; do
+            if solana cluster-version 2>/dev/null | grep -q "cluster version"; then
+              echo "Validator ready"
+              break
+            fi
+            echo "Waiting for validator... attempt $i"
+            sleep 1
+          done
+
+          # Run tests
+          echo "Running tests..."
+          yarn test || TEST_RESULT=$?
+
+          # Kill validator
+          echo "Shutting down validator..."
+          kill $VALIDATOR_PID 2>/dev/null || true
+          wait $VALIDATOR_PID 2>/dev/null || true
+
+          exit ${TEST_RESULT:-0}
+        env:
+          RUST_LOG: info
+
+      - name: Run linter with fix check
+        run: |
+          yarn run lint:fix
+          git diff --exit-code || echo "Linting changes detected"
+        continue-on-error: true
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "programs/opinion-market"
+
+      - name: Run Clippy
+        run: cargo clippy --release -- -D warnings
+        working-directory: programs/opinion-market
+
+  security-audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: programs/opinion-market
+        continue-on-error: true
+
+  build-verification:
+    name: Build Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "programs/opinion-market"
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: programs/opinion-market
+
+      - name: Verify binary size
+        run: |
+          if [ -f "programs/opinion-market/target/release/opinion_market.so" ]; then
+            SIZE=$(stat -c%s "programs/opinion-market/target/release/opinion_market.so" 2>/dev/null || stat -f%z "programs/opinion-market/target/release/opinion_market.so" 2>/dev/null)
+            SIZE_KB=$((SIZE / 1024))
+            echo "Binary size: $SIZE_KB KB"
+            if [ "$SIZE_KB" -gt 410 ]; then
+              echo "⚠️  Warning: Binary size increased (>410KB)"
+            fi
+          else
+            echo "Binary not found at expected path"
+          fi

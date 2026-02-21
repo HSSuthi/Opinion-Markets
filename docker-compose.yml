@@ -1,0 +1,153 @@
+version: "3.8"
+
+services:
+  # Smart contract build and test environment
+  solana-contract:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opinion-markets-contract
+    working_dir: /app
+    environment:
+      RUST_BACKTRACE: 1
+      RUST_LOG: info
+    volumes:
+      - .:/app
+      - cargo-cache:/home/solana/.cargo
+      - target-cache:/app/programs/opinion-market/target
+    command: >
+      bash -c "
+        echo 'Opinion-Markets Smart Contract Build Environment'
+        echo 'Available commands:'
+        echo '  cargo build --release'
+        echo '  cargo test'
+        echo '  cargo clippy'
+        echo ''
+        /bin/bash
+      "
+    profiles:
+      - dev
+
+  # Local Solana validator (for testing)
+  solana-validator:
+    image: solanalabs/solana:v1.18.0
+    container_name: opinion-markets-validator
+    ports:
+      - "8899:8899"   # RPC
+      - "8900:8900"   # RPC (WS)
+      - "9900:9900"   # Gossip
+    environment:
+      SOLANA_LOG: info
+    volumes:
+      - solana-data:/var/lib/solana
+    command: >
+      bash -c "
+        solana-validator
+          --ledger /var/lib/solana
+          --bind-address 0.0.0.0
+          --rpc-bind-address 0.0.0.0
+          --rpc-port 8899
+          --account-index program
+      "
+    profiles:
+      - localnet
+
+  # PostgreSQL for API event indexing (Phase 2.4)
+  postgres:
+    image: postgres:15-alpine
+    container_name: opinion-markets-db
+    environment:
+      POSTGRES_DB: opinion_markets
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./api/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - dev
+      - api
+
+  # Redis for caching (optional, for API)
+  redis:
+    image: redis:7-alpine
+    container_name: opinion-markets-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - dev
+      - api
+
+  # API server (Phase 2.4 - planned)
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: opinion-markets-api
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/opinion_markets
+      REDIS_URL: redis://redis:6379
+      SOLANA_RPC_URL: http://solana-validator:8899
+      PROGRAM_ID: 2NaUpg4jEZVGDBmmuKYLdsAfSGKwHxjghhfgVpQvZJYu
+      PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - api
+
+  # Development container with all tools
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opinion-markets-dev
+    working_dir: /app
+    environment:
+      RUST_BACKTRACE: 1
+      RUST_LOG: debug
+      NODE_ENV: development
+      SOLANA_RPC_URL: http://solana-validator:8899
+    volumes:
+      - .:/app
+      - cargo-cache:/home/solana/.cargo
+      - target-cache:/app/programs/opinion-market/target
+    depends_on:
+      solana-validator:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    profiles:
+      - dev
+
+volumes:
+  cargo-cache:
+  target-cache:
+  solana-data:
+  postgres-data:
+  redis-data:
+
+networks:
+  default:
+    name: opinion-markets-network

@@ -1,0 +1,49 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+.npm
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Test and coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Documentation
+CHANGELOG.md
+LICENSE
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Development
+.solana-cli
+.anchor/

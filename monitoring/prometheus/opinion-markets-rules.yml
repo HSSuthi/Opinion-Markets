@@ -1,0 +1,218 @@
+groups:
+  - name: opinion_markets_contract
+    interval: 30s
+    rules:
+      # API Server Health
+      - alert: APIServerDown
+        expr: up{job="opinion-markets-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Opinion-Markets API server is down"
+          description: "API server has been unreachable for more than 1 minute"
+
+      - alert: APIHighErrorRate
+        expr: rate(http_requests_total{job="opinion-markets-api",status=~"5.."}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High error rate in API (>5%)"
+          description: "API error rate is {{ $value | humanizePercentage }}"
+
+      - alert: APIHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="opinion-markets-api"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "API P95 latency is high (>1s)"
+          description: "Current P95 latency: {{ $value }}s"
+
+      # Transaction Metrics
+      - alert: TransactionFailureRateHigh
+        expr: rate(solana_transaction_failures_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          component: contract
+        annotations:
+          summary: "High transaction failure rate (>10%)"
+          description: "Transaction failure rate: {{ $value | humanizePercentage }}"
+
+      - alert: SettlementLatencyHigh
+        expr: histogram_quantile(0.95, rate(solana_settlement_latency_seconds_bucket[5m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Market settlement latency is high (>30s)"
+          description: "Current P95 settlement latency: {{ $value }}s"
+
+      # Oracle Operations
+      - alert: OracleServiceDown
+        expr: up{job="contract-monitor"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Oracle service is down"
+          description: "Oracle service has been unreachable for more than 2 minutes"
+
+      - alert: VRFCallbackTimeout
+        expr: rate(vrf_callback_timeout_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: vrf
+        annotations:
+          summary: "VRF callback timeouts detected"
+          description: "VRF callbacks timing out ({{ $value | humanize }} timeouts/sec)"
+
+      - alert: OracleSentimentDelayHigh
+        expr: histogram_quantile(0.95, rate(oracle_sentiment_analysis_duration_seconds_bucket[5m])) > 60
+        for: 5m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Sentiment analysis is slow (>60s)"
+          description: "P95 sentiment analysis time: {{ $value }}s"
+
+      # Database Health
+      - alert: DatabaseConnectionPoolExhausted
+        expr: pg_stat_activity_count{datname="opinion_markets"} / 100 > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "PostgreSQL connection pool nearly exhausted"
+          description: "Using {{ $value | humanizePercentage }} of connection pool"
+
+      - alert: DatabaseHighQueriesPending
+        expr: pg_slow_queries_total > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "High number of slow queries (>10)"
+          description: "Slow queries: {{ $value | humanize }}"
+
+      # Redis Health
+      - alert: RedisMemoryUsageHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: cache
+        annotations:
+          summary: "Redis memory usage is high (>90%)"
+          description: "Redis memory: {{ $value | humanizePercentage }}"
+
+      - alert: RedisConnectionsHigh
+        expr: redis_connected_clients > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: cache
+        annotations:
+          summary: "High Redis connection count (>1000)"
+          description: "Current connections: {{ $value | humanize }}"
+
+      # Solana Chain Health
+      - alert: SolanaSlotLaggingBehind
+        expr: solana_current_slot - solana_confirmed_slot > 100
+        for: 2m
+        labels:
+          severity: warning
+          component: solana
+        annotations:
+          summary: "Solana slot is lagging (>100 slots behind)"
+          description: "Current slot lag: {{ $value }} slots"
+
+      - alert: SolanaRPCResponseTimeHigh
+        expr: histogram_quantile(0.95, rate(solana_rpc_call_duration_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: solana
+        annotations:
+          summary: "Solana RPC response time is high (>5s)"
+          description: "P95 RPC latency: {{ $value }}s"
+
+  - name: opinion_markets_availability
+    interval: 1m
+    rules:
+      # Service Availability
+      - alert: APIUnavailable30Minutes
+        expr: up{job="opinion-markets-api"} == 0
+        for: 30m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "API has been unavailable for 30 minutes"
+          description: "API downtime exceeds SLA threshold (5 nines)"
+          action: "Page on-call engineer"
+
+      - alert: OracleOperationsStalled
+        expr: increase(oracle_operations_total[30m]) == 0 and hour() >= 9 and hour() < 17
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Oracle operations have stalled during business hours"
+          description: "No oracle operations in last 30 minutes"
+          action: "Page oracle operations lead"
+
+      - alert: MarketSettlementBacklog
+        expr: opinion_markets_awaiting_settlement_count > 100
+        for: 10m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Large backlog of markets awaiting settlement"
+          description: "Markets pending settlement: {{ $value | humanize }}"
+
+  - name: opinion_markets_capacity
+    interval: 5m
+    rules:
+      # Capacity Planning
+      - alert: DatabaseDiskSpaceLow
+        expr: node_filesystem_avail_bytes{mountpoint="/var/lib/postgresql"} / node_filesystem_size_bytes < 0.2
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Database disk space is low (<20%)"
+          description: "Available disk space: {{ $value | humanizePercentage }}"
+
+      - alert: CPUUsageHigh
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "CPU usage is high (>80%)"
+          description: "CPU usage: {{ $value | humanize }}%"
+
+      - alert: MemoryUsageHigh
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Memory usage is high (>85%)"
+          description: "Memory usage: {{ $value | humanize }}%"

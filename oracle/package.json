@@ -1,0 +1,52 @@
+{
+  "name": "opinion-markets-oracle",
+  "version": "0.1.0",
+  "description": "Oracle service for Opinion-Markets sentiment analysis and market settlement",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "keywords": [
+    "oracle",
+    "solana",
+    "defi",
+    "sentiment-analysis",
+    "chainlink-vrf"
+  ],
+  "author": "Opinion-Markets Team",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.99.0",
+    "bull": "^4.11.5",
+    "dotenv": "^16.4.5",
+    "pino": "^8.19.0",
+    "pino-http": "^9.0.0",
+    "pg": "^8.11.3",
+    "typeorm": "^0.3.19",
+    "node-fetch": "^2.7.0",
+    "axios": "^1.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/jest": "^29.5.11",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.17.0",
+    "@typescript-eslint/parser": "^6.17.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
