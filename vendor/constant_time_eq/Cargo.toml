@@ -1,0 +1,15 @@
+[package]
+name = "constant_time_eq"
+version = "0.4.2"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Constant-time byte slice comparison"
+repository = "https://github.com/cesarghali/constant_time_eq"
+
+[lib]
+name = "constant_time_eq"
+path = "src/lib.rs"
+
+[features]
+default = []
+
