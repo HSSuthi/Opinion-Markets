@@ -20,6 +20,8 @@ pub const DURATION_24H: u64 = 86_400;
 pub const DURATION_3D: u64 = 259_200;
 pub const DURATION_7D: u64 = 604_800;
 pub const DURATION_14D: u64 = 1_209_600;
+/// Time after market closes before stakers can recover stakes (14 days)
+pub const RECOVERY_PERIOD: i64 = 1_209_600;
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 #[error_code]
@@ -67,6 +69,55 @@ pub enum MarketState {
     Closed,
     Scored,
     Settled,
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
+
+/// Emitted when a new opinion market is created
+#[event]
+pub struct MarketCreatedEvent {
+    pub market: Pubkey,
+    pub creator: Pubkey,
+    pub statement: String,
+    pub closes_at: i64,
+    pub duration_secs: u64,
+}
+
+/// Emitted when a staker stakes an opinion on a market
+#[event]
+pub struct OpinionStakedEvent {
+    pub market: Pubkey,
+    pub staker: Pubkey,
+    pub stake_amount: u64,
+    pub ipfs_cid: String,
+    pub total_stake_after: u64,
+}
+
+/// Emitted when a market transitions from Active to Closed
+#[event]
+pub struct MarketClosedEvent {
+    pub market: Pubkey,
+    pub closed_at: i64,
+    pub total_stakers: u32,
+    pub total_stake: u64,
+}
+
+/// Emitted when oracle records sentiment analysis
+#[event]
+pub struct SentimentRecordedEvent {
+    pub market: Pubkey,
+    pub sentiment_score: u8,
+    pub confidence: u8,
+    pub summary_hash: [u8; 32],
+}
+
+/// Emitted when lottery is settled and prize distributed
+#[event]
+pub struct LotterySettledEvent {
+    pub market: Pubkey,
+    pub winner: Pubkey,
+    pub prize_amount: u64,
+    pub protocol_fee: u64,
 }
 
 // ── Account Structs ──────────────────────────────────────────────────────────
@@ -218,6 +269,15 @@ pub mod opinion_market {
         market.bump = ctx.bumps.market;
 
         msg!("Market created: closes_at={}", market.closes_at);
+
+        emit!(MarketCreatedEvent {
+            market: ctx.accounts.market.key(),
+            creator: ctx.accounts.creator.key(),
+            statement: statement.clone(),
+            closes_at: market.closes_at,
+            duration_secs,
+        });
+
         Ok(())
     }
 
@@ -255,13 +315,23 @@ pub mod opinion_market {
         opinion.staker = ctx.accounts.staker.key();
         opinion.stake_amount = stake_amount;
         opinion.text_hash = text_hash;
-        opinion.ipfs_cid = ipfs_cid;
+        opinion.ipfs_cid = ipfs_cid.clone();
         opinion.created_at = clock.unix_timestamp;
         opinion.bump = ctx.bumps.opinion;
+
+        msg!("Opinion staked: staker={} amount={} cid={}", ctx.accounts.staker.key(), stake_amount, ipfs_cid);
 
         let market = &mut ctx.accounts.market;
         market.total_stake = market.total_stake.saturating_add(stake_amount);
         market.staker_count = market.staker_count.saturating_add(1);
+
+        emit!(OpinionStakedEvent {
+            market: ctx.accounts.market.key(),
+            staker: ctx.accounts.staker.key(),
+            stake_amount,
+            ipfs_cid: ipfs_cid.clone(),
+            total_stake_after: market.total_stake,
+        });
 
         Ok(())
     }
@@ -274,6 +344,14 @@ pub mod opinion_market {
         require!(clock.unix_timestamp >= market.closes_at, OpinionError::MarketNotExpired);
         market.state = MarketState::Closed;
         msg!("Market closed");
+
+        emit!(MarketClosedEvent {
+            market: ctx.accounts.market.key(),
+            closed_at: clock.unix_timestamp,
+            total_stakers: market.staker_count,
+            total_stake: market.total_stake,
+        });
+
         Ok(())
     }
 
@@ -296,10 +374,18 @@ pub mod opinion_market {
         market.state = MarketState::Scored;
 
         msg!("Sentiment: score={} confidence={}", score, confidence);
+
+        emit!(SentimentRecordedEvent {
+            market: ctx.accounts.market.key(),
+            sentiment_score: score,
+            confidence,
+            summary_hash,
+        });
+
         Ok(())
     }
 
-    /// Distribute prize pool. Oracle supplies the winner's token account.
+    /// Distribute prize pool. Oracle supplies the winner's pubkey and token account.
     ///
     /// DEVNET: Oracle selects winner proportionally off-chain using recent
     /// blockhash as randomness seed.
@@ -307,7 +393,13 @@ pub mod opinion_market {
     /// MAINNET TODO: Replace with Chainlink VRF on-chain callback.
     /// VRF request is made in record_sentiment, callback fires run_lottery
     /// with the verified random winner pubkey.
-    pub fn run_lottery(ctx: Context<RunLottery>) -> Result<()> {
+    pub fn run_lottery(ctx: Context<RunLottery>, winner_pubkey: Pubkey) -> Result<()> {
+        // Validate winner account ownership to prevent oracle from passing arbitrary accounts
+        require!(
+            ctx.accounts.winner_token_account.owner == winner_pubkey,
+            OpinionError::Unauthorized
+        );
+
         let market = &ctx.accounts.market;
         require!(market.state == MarketState::Scored, OpinionError::MarketNotScored);
         require!(market.total_stake > 0, OpinionError::EmptyPrizePool);
@@ -319,6 +411,9 @@ pub mod opinion_market {
             .checked_div(10_000)
             .unwrap();
         let prize_pool = total_stake.checked_sub(protocol_fee).unwrap();
+
+        msg!("Settlement calculations: total_stake={} protocol_fee={} prize_pool={}",
+            total_stake, protocol_fee, prize_pool);
 
         let market_uuid = market.uuid;
         let market_bump = market.bump;
@@ -352,10 +447,62 @@ pub mod opinion_market {
         token::transfer(prize_cpi, prize_pool)?;
 
         let market = &mut ctx.accounts.market;
-        market.winner = Some(ctx.accounts.winner_token_account.owner);
+        market.winner = Some(winner_pubkey);
         market.state = MarketState::Settled;
 
-        msg!("Lottery settled: prize={} fee={}", prize_pool, protocol_fee);
+        msg!("Lottery settled: winner={} prize={} fee={}", winner_pubkey, prize_pool, protocol_fee);
+
+        emit!(LotterySettledEvent {
+            market: ctx.accounts.market.key(),
+            winner: winner_pubkey,
+            prize_amount: prize_pool,
+            protocol_fee,
+        });
+
+        Ok(())
+    }
+
+    /// Allow stakers to recover their stake if market is abandoned (not settled after 14 days).
+    /// This is an escape hatch mechanism to prevent funds from being locked forever.
+    pub fn recover_stake(ctx: Context<RecoverStake>) -> Result<()> {
+        let clock = Clock::get()?;
+        let market = &ctx.accounts.market;
+
+        // Market must have been closed for at least 14 days
+        require!(
+            clock.unix_timestamp >= market.closes_at + RECOVERY_PERIOD,
+            OpinionError::MarketNotExpired  // Reusing error: not enough time has passed
+        );
+
+        // Only allow recovery from markets that are NOT already settled
+        // (settled markets already distributed funds)
+        require!(
+            market.state != MarketState::Settled,
+            OpinionError::MarketNotActive  // Reusing error: cannot recover from settled market
+        );
+
+        let opinion = &ctx.accounts.opinion;
+        let stake_amount = opinion.stake_amount;
+
+        // Transfer stake from escrow back to staker
+        let market_uuid = market.uuid;
+        let market_bump = market.bump;
+        let seeds: &[&[u8]] = &[b"market", &market_uuid, &[market_bump]];
+        let signer_seeds = &[seeds];
+
+        let recovery_cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.escrow_token_account.to_account_info(),
+                to: ctx.accounts.staker_usdc.to_account_info(),
+                authority: ctx.accounts.market.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::transfer(recovery_cpi, stake_amount)?;
+
+        msg!("Stake recovered: staker={} amount={}", ctx.accounts.staker.key(), stake_amount);
+
         Ok(())
     }
 }
@@ -532,6 +679,7 @@ pub struct RunLottery<'info> {
     pub escrow_token_account: Account<'info, TokenAccount>,
 
     /// Winner's USDC token account — oracle has computed winner proportionally
+    /// Winner pubkey is passed as instruction parameter to enable validation
     #[account(
         mut,
         constraint = winner_token_account.mint == config.usdc_mint @ OpinionError::MintMismatch,
@@ -545,6 +693,46 @@ pub struct RunLottery<'info> {
         constraint = treasury_usdc.owner == config.treasury @ OpinionError::TreasuryMismatch,
     )]
     pub treasury_usdc: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct RecoverStake<'info> {
+    #[account(mut)]
+    pub staker: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    #[account(
+        seeds = [b"market", market.uuid.as_ref()],
+        bump = market.bump,
+    )]
+    pub market: Account<'info, Market>,
+
+    /// Escrow account holding stakes
+    #[account(
+        mut,
+        seeds = [b"escrow", market.key().as_ref()],
+        bump,
+    )]
+    pub escrow_token_account: Account<'info, TokenAccount>,
+
+    /// The staker's opinion on this market
+    #[account(
+        seeds = [b"opinion", market.key().as_ref(), staker.key().as_ref()],
+        bump = opinion.bump,
+    )]
+    pub opinion: Account<'info, Opinion>,
+
+    /// Staker's USDC token account (receives recovered stake)
+    #[account(
+        mut,
+        constraint = staker_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
+        constraint = staker_usdc.owner == staker.key(),
+    )]
+    pub staker_usdc: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
 }
