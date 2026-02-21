@@ -18,13 +18,20 @@
     "@solana/wallet-adapter-react": "^0.15.35",
     "@solana/wallet-adapter-react-ui": "^0.9.34",
     "@solana/wallet-adapter-wallets": "^0.19.32",
-    "@solana/web3.js": "^1.99.0",
+    "@solana/web3.js": "^1.91.0",
     "@coral-xyz/anchor": "^0.32.1",
     "axios": "^1.6.5",
     "swr": "^2.2.4",
     "zustand": "^4.4.6",
     "clsx": "^2.0.0",
-    "date-fns": "^2.30.0"
+    "date-fns": "^2.30.0",
+    "framer-motion": "^10.16.16",
+    "html2canvas": "^1.4.1",
+    "react-hot-toast": "^2.4.1",
+    "react-hook-form": "^7.48.1",
+    "zod": "^3.22.4",
+    "@hookform/resolvers": "^3.3.4",
+    "recharts": "^2.10.3"
   },
   "devDependencies": {
     "@types/react": "^18.2.37",
