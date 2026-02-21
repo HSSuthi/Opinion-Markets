@@ -121,7 +121,7 @@ describe("opinion-market", () => {
       .rpc();
 
     const config = await program.account.programConfig.fetch(configPda);
-    assert.equal(config.oracle.toBase58(), oracle.publicKey.toBase58());
+    assert.equal(config.oracleAuthority.toBase58(), oracle.publicKey.toBase58());
     assert.equal(config.treasury.toBase58(), treasury.publicKey.toBase58());
     assert.equal(config.usdcMint.toBase58(), usdcMint.toBase58());
   });
@@ -285,7 +285,7 @@ describe("opinion-market", () => {
       await program.methods
         .recordSentiment(75, 1, Array(32).fill(0))
         .accounts({
-          oracle: oracle.publicKey,
+          oracleAuthority: oracle.publicKey,
           config: configPda,
           market: marketPda,
         })
@@ -302,7 +302,7 @@ describe("opinion-market", () => {
       await program.methods
         .recordSentiment(101, 1, Array(32).fill(0))
         .accounts({
-          oracle: oracle.publicKey,
+          oracleAuthority: oracle.publicKey,
           config: configPda,
           market: marketPda,
         })
@@ -319,7 +319,7 @@ describe("opinion-market", () => {
       await program.methods
         .recordSentiment(50, 3, Array(32).fill(0))
         .accounts({
-          oracle: oracle.publicKey,
+          oracleAuthority: oracle.publicKey,
           config: configPda,
           market: marketPda,
         })
@@ -336,7 +336,7 @@ describe("opinion-market", () => {
       await program.methods
         .runLottery(staker1.publicKey)
         .accounts({
-          oracle: oracle.publicKey,
+          oracleAuthority: oracle.publicKey,
           config: configPda,
           market: marketPda,
           escrowTokenAccount: escrowPda,
@@ -752,5 +752,386 @@ describe("opinion-market", () => {
     // machine flow is fully covered by the e2e oracle service run.
 
     assert.ok(true, "Full settlement tested via oracle service e2e");
+  });
+
+  // ─── VRF Integration Tests ──────────────────────────────────────────────
+
+  describe("Chainlink VRF Integration", () => {
+    const vrfMarketUuid = Array.from(crypto.randomBytes(16));
+    const vrfUuidBuffer = Buffer.from(vrfMarketUuid);
+
+    let vrfMarketPda: anchor.web3.PublicKey;
+    let vrfEscrowPda: anchor.web3.PublicKey;
+    let vrfRequestPda: anchor.web3.PublicKey;
+
+    before("Setup VRF test market", async () => {
+      [vrfMarketPda] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("market"), vrfUuidBuffer],
+        program.programId
+      );
+      [vrfEscrowPda] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow"), vrfMarketPda.toBuffer()],
+        program.programId
+      );
+      [vrfRequestPda] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("vrf_request"), vrfMarketPda.toBuffer()],
+        program.programId
+      );
+
+      // Create market for VRF testing
+      await program.methods
+        .createMarket(
+          "Will AI be more advanced than humans by 2030?",
+          new BN(86_400), // 24h duration
+          vrfMarketUuid
+        )
+        .accounts({
+          creator: creator.publicKey,
+          config: configPda,
+          market: vrfMarketPda,
+          escrowTokenAccount: vrfEscrowPda,
+          creatorUsdc,
+          treasuryUsdc,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        })
+        .signers([creator])
+        .rpc();
+    });
+
+    it("Stakes opinions on VRF test market", async () => {
+      const stakes = [
+        { kp: staker1, ata: staker1Usdc, amount: 2_000_000 }, // $2
+        { kp: staker2, ata: staker2Usdc, amount: 3_000_000 }, // $3
+      ];
+
+      for (const { kp, ata, amount } of stakes) {
+        const textHash = Array.from(
+          crypto
+            .createHash("sha256")
+            .update(`VRF Opinion: ${kp.publicKey.toBase58()}`)
+            .digest()
+        );
+        const [opinionPda] = anchor.web3.PublicKey.findProgramAddressSync(
+          [Buffer.from("opinion"), vrfMarketPda.toBuffer(), kp.publicKey.toBuffer()],
+          program.programId
+        );
+
+        await program.methods
+          .stakeOpinion(new BN(amount), textHash, "QmVrfOpinion1234")
+          .accounts({
+            staker: kp.publicKey,
+            config: configPda,
+            market: vrfMarketPda,
+            escrowTokenAccount: vrfEscrowPda,
+            opinion: opinionPda,
+            stakerUsdc: ata,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          })
+          .signers([kp])
+          .rpc();
+      }
+
+      const market = await program.account.market.fetch(vrfMarketPda);
+      assert.equal(market.stakerCount, 2);
+      assert.equal(market.totalStake.toNumber(), 5_000_000); // $5
+    });
+
+    it("Records sentiment on VRF market (moves to Scored state)", async () => {
+      // Note: In production, this would require the market to be in Closed state
+      // For testing, we use the oracle constraint validation which is the key security check
+      // Full state validation requires time-warp to test properly
+
+      await program.methods
+        .recordSentiment(75, 2, Array(32).fill(42))
+        .accounts({
+          oracleAuthority: oracle.publicKey,
+          config: configPda,
+          market: vrfMarketPda,
+        })
+        .signers([oracle])
+        .rpc();
+
+      const market = await program.account.market.fetch(vrfMarketPda);
+      assert.equal(market.sentimentScore, 75);
+      assert.equal(market.confidence, 2);
+      assert.deepEqual(market.state, { scored: {} });
+    });
+
+    it("Requests VRF randomness (moves to AwaitingRandomness state)", async () => {
+      await program.methods
+        .requestVrfRandomness()
+        .accounts({
+          oracleAuthority: oracle.publicKey,
+          config: configPda,
+          market: vrfMarketPda,
+          vrfRequest: vrfRequestPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([oracle])
+        .rpc();
+
+      const market = await program.account.market.fetch(vrfMarketPda);
+      assert.deepEqual(market.state, { awaitingRandomness: {} });
+
+      const vrfRequest = await program.account.vrfRequest.fetch(vrfRequestPda);
+      assert.equal(vrfRequest.market.toBase58(), vrfMarketPda.toBase58());
+      assert(vrfRequest.requestId > 0, "Request ID should be set");
+      assert.equal(vrfRequest.randomness, null, "Randomness not yet fulfilled");
+    });
+
+    it("Fulfills VRF randomness callback", async () => {
+      const mockRandomness = Array.from(crypto.randomBytes(32));
+
+      await program.methods
+        .fulfillVrfRandomness(mockRandomness)
+        .accounts({
+          vrfCallback: creator.publicKey, // Mock VRF contract for testing
+          market: vrfMarketPda,
+          vrfRequest: vrfRequestPda,
+        })
+        .rpc();
+
+      const vrfRequest = await program.account.vrfRequest.fetch(vrfRequestPda);
+      assert(vrfRequest.randomness !== null, "Randomness should be fulfilled");
+      assert(vrfRequest.fulfilledAt !== null, "Fulfilled timestamp should be set");
+    });
+
+    it("Rejects run_lottery_with_vrf if randomness not fulfilled", async () => {
+      // Create a new VRF request that is NOT fulfilled
+      const unfulfilled_uuid = Array.from(crypto.randomBytes(16));
+      const unfulfilled_uuid_buffer = Buffer.from(unfulfilled_uuid);
+
+      const [unfulfilled_market] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("market"), unfulfilled_uuid_buffer],
+        program.programId
+      );
+      const [unfulfilled_escrow] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow"), unfulfilled_market.toBuffer()],
+        program.programId
+      );
+      const [unfulfilled_vrf_request] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("vrf_request"), unfulfilled_market.toBuffer()],
+        program.programId
+      );
+
+      // Create market
+      await program.methods
+        .createMarket(
+          "Test unfulfilled VRF",
+          new BN(86_400),
+          unfulfilled_uuid
+        )
+        .accounts({
+          creator: creator.publicKey,
+          config: configPda,
+          market: unfulfilled_market,
+          escrowTokenAccount: unfulfilled_escrow,
+          creatorUsdc,
+          treasuryUsdc,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        })
+        .signers([creator])
+        .rpc();
+
+      // Stake
+      const [unfulfilled_opinion] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("opinion"), unfulfilled_market.toBuffer(), staker1.publicKey.toBuffer()],
+        program.programId
+      );
+
+      await program.methods
+        .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmTest")
+        .accounts({
+          staker: staker1.publicKey,
+          config: configPda,
+          market: unfulfilled_market,
+          escrowTokenAccount: unfulfilled_escrow,
+          opinion: unfulfilled_opinion,
+          stakerUsdc: staker1Usdc,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([staker1])
+        .rpc();
+
+      // Record sentiment
+      await program.methods
+        .recordSentiment(50, 1, Array(32).fill(0))
+        .accounts({
+          oracleAuthority: oracle.publicKey,
+          config: configPda,
+          market: unfulfilled_market,
+        })
+        .signers([oracle])
+        .rpc();
+
+      // Request VRF (without fulfilling)
+      await program.methods
+        .requestVrfRandomness()
+        .accounts({
+          oracleAuthority: oracle.publicKey,
+          config: configPda,
+          market: unfulfilled_market,
+          vrfRequest: unfulfilled_vrf_request,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([oracle])
+        .rpc();
+
+      // Try to settle without fulfilling randomness
+      try {
+        await program.methods
+          .runLotteryWithVrf(staker1.publicKey)
+          .accounts({
+            oracleAuthority: oracle.publicKey,
+            config: configPda,
+            market: unfulfilled_market,
+            vrfRequest: unfulfilled_vrf_request,
+            escrowTokenAccount: unfulfilled_escrow,
+            winnerTokenAccount: staker1Usdc,
+            treasuryUsdc,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([oracle])
+          .rpc();
+        assert.fail("Expected RandomnessNotReady error");
+      } catch (e: any) {
+        assert.include(e.message, "RandomnessNotReady");
+      }
+    });
+
+    it("Settles lottery with VRF-selected winner", async () => {
+      const escrowBefore = await getAccount(connection, vrfEscrowPda);
+      const staker1Before = await getAccount(connection, staker1Usdc);
+      const treasuryBefore = await getAccount(connection, treasuryUsdc);
+
+      // Select winner (staker1 in this test)
+      await program.methods
+        .runLotteryWithVrf(staker1.publicKey)
+        .accounts({
+          oracleAuthority: oracle.publicKey,
+          config: configPda,
+          market: vrfMarketPda,
+          vrfRequest: vrfRequestPda,
+          escrowTokenAccount: vrfEscrowPda,
+          winnerTokenAccount: staker1Usdc,
+          treasuryUsdc,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([oracle])
+        .rpc();
+
+      const market = await program.account.market.fetch(vrfMarketPda);
+      assert.deepEqual(market.state, { settled: {} });
+      assert.equal(market.winner.toBase58(), staker1.publicKey.toBase58());
+
+      // Verify prize distribution
+      const totalStake = 5_000_000; // $5
+      const protocolFee = Math.floor((totalStake * 1_000) / 10_000); // 10%
+      const prize = totalStake - protocolFee;
+
+      const escrowAfter = await getAccount(connection, vrfEscrowPda);
+      const staker1After = await getAccount(connection, staker1Usdc);
+      const treasuryAfter = await getAccount(connection, treasuryUsdc);
+
+      assert.equal(
+        Number(escrowBefore.amount) - Number(escrowAfter.amount),
+        totalStake,
+        "Escrow depleted by total stake"
+      );
+      assert.equal(
+        Number(staker1After.amount) - Number(staker1Before.amount),
+        prize,
+        "Winner receives prize (minus protocol fee)"
+      );
+      assert.equal(
+        Number(treasuryAfter.amount) - Number(treasuryBefore.amount),
+        protocolFee,
+        "Treasury receives protocol fee"
+      );
+    });
+
+    it("Rejects non-oracle from requesting VRF randomness", async () => {
+      const impostor = anchor.web3.Keypair.generate();
+      const sig = await connection.requestAirdrop(
+        impostor.publicKey,
+        anchor.web3.LAMPORTS_PER_SOL
+      );
+      await connection.confirmTransaction(sig);
+
+      const bad_uuid = Array.from(crypto.randomBytes(16));
+      const bad_uuid_buffer = Buffer.from(bad_uuid);
+      const [bad_market] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("market"), bad_uuid_buffer],
+        program.programId
+      );
+      const [bad_escrow] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow"), bad_market.toBuffer()],
+        program.programId
+      );
+
+      // Create market
+      await program.methods
+        .createMarket(
+          "Test impostor VRF",
+          new BN(86_400),
+          bad_uuid
+        )
+        .accounts({
+          creator: creator.publicKey,
+          config: configPda,
+          market: bad_market,
+          escrowTokenAccount: bad_escrow,
+          creatorUsdc,
+          treasuryUsdc,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        })
+        .signers([creator])
+        .rpc();
+
+      // Record sentiment first (to get to Scored state)
+      await program.methods
+        .recordSentiment(50, 1, Array(32).fill(0))
+        .accounts({
+          oracleAuthority: oracle.publicKey,
+          config: configPda,
+          market: bad_market,
+        })
+        .signers([oracle])
+        .rpc();
+
+      const [bad_vrf_request] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("vrf_request"), bad_market.toBuffer()],
+        program.programId
+      );
+
+      // Try to request VRF as impostor
+      try {
+        await program.methods
+          .requestVrfRandomness()
+          .accounts({
+            oracle: impostor.publicKey,
+            config: configPda,
+            market: bad_market,
+            vrfRequest: bad_vrf_request,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          })
+          .signers([impostor])
+          .rpc();
+        assert.fail("Expected Unauthorized error");
+      } catch (e: any) {
+        assert.include(e.message, "Unauthorized");
+      }
+    });
   });
 });
