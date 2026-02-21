@@ -1,0 +1,126 @@
+:root {
+  --bg: #06080f;
+  --panel: #0e1322cc;
+  --stroke: #27314a;
+  --text: #eff3ff;
+  --muted: #9aa4c7;
+  --green: #00c087;
+  --red: #ff4f6d;
+  --accent: #5a86ff;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--text);
+  background: radial-gradient(1200px 600px at 20% -10%, #1f2e66 0%, transparent 60%), var(--bg);
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.bg-orb {
+  position: fixed;
+  border-radius: 999px;
+  filter: blur(80px);
+  opacity: 0.22;
+  z-index: -1;
+}
+.orb-1 { width: 280px; height: 280px; background: #4584ff; top: 10%; right: 5%; }
+.orb-2 { width: 220px; height: 220px; background: #00c087; bottom: 10%; left: 4%; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.brand { display: flex; gap: 12px; align-items: center; }
+.logo {
+  width: 44px; height: 44px; border-radius: 12px;
+  display: grid; place-items: center;
+  font-weight: 800;
+  background: linear-gradient(140deg, #7ca5ff, #3957c9);
+}
+.brand h1 { font-size: 1rem; margin: 0; }
+.brand p { margin: 2px 0 0; color: var(--muted); font-size: .8rem; }
+.nav-links { display: flex; gap: 16px; }
+.nav-links a { color: var(--muted); text-decoration: none; font-size: .9rem; }
+.wallet-btn, button {
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: #10182a;
+  color: var(--text);
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wallet-btn { background: linear-gradient(120deg, #13203f, #102535); }
+
+.layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+}
+.glass {
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  padding: 18px;
+  backdrop-filter: blur(16px);
+}
+.hero h2 { margin: 8px 0; font-size: clamp(1.4rem, 2.4vw, 2rem); }
+.hero h2 span { color: #89a9ff; }
+.hero p { color: var(--muted); line-height: 1.5; }
+.eyebrow { text-transform: uppercase; letter-spacing: .08em; color: #7e95d8; font-size: .72rem; }
+.hero-actions { display: flex; gap: 10px; margin-top: 14px; }
+.primary { background: linear-gradient(120deg, #4977ff, #3153d1); border: none; }
+.ghost { background: transparent; }
+
+.stats h3, .markets h3, .portfolio h3, .activity h3 { margin-top: 0; }
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat-grid article { background: #111a30; border: 1px solid #1d2844; border-radius: 12px; padding: 10px; }
+.stat-grid p { margin: 0; color: var(--muted); font-size: .78rem; }
+.stat-grid strong { display: block; margin-top: 4px; }
+
+.markets { grid-column: 1 / -1; }
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { padding: 8px 10px; font-size: .8rem; }
+.chip.active { border-color: #3f68e0; background: #152447; }
+.market-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.market-card {
+  background: #0d1529;
+  border: 1px solid #223257;
+  border-radius: 14px;
+  padding: 14px;
+}
+.market-card h4 { margin: 0 0 8px; font-size: .95rem; }
+.meta { color: var(--muted); font-size: .78rem; display: flex; justify-content: space-between; }
+.odds { display: flex; gap: 8px; margin-top: 12px; }
+.odds button { flex: 1; font-weight: 700; }
+.yes { border-color: #1f7257; background: #0d2f26; color: #7ff2c5; }
+.no { border-color: #7a2740; background: #361322; color: #ffa1b4; }
+
+.portfolio, .activity { min-height: 210px; }
+.position-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #22304d; }
+.position-row p { margin: 0; }
+.position-row small { color: var(--muted); }
+.gain { color: var(--green); }
+.loss { color: var(--red); }
+.activity ul { list-style: none; margin: 0; padding: 0; }
+.activity li { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #22304d; color: var(--muted); }
+.activity b { color: var(--text); }
+
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; }
+}
