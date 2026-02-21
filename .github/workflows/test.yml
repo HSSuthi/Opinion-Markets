@@ -1,0 +1,139 @@
+name: Smart Contract Tests
+
+on:
+  push:
+    branches: [main, develop, "claude/*"]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  RUST_TOOLCHAIN: 1.89.0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "programs/opinion-market"
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build smart contract
+        run: cargo build --release
+        working-directory: programs/opinion-market
+
+      - name: Check formatting
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Run tests
+        run: npm test
+        env:
+          RUST_LOG: info
+
+      - name: Run linter with fix check
+        run: npm run lint:fix && git diff --exit-code
+        continue-on-error: true
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "programs/opinion-market"
+
+      - name: Run Clippy
+        run: cargo clippy --release -- -D warnings
+        working-directory: programs/opinion-market
+
+  security-audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: programs/opinion-market
+        continue-on-error: true
+
+  build-verification:
+    name: Build Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "programs/opinion-market"
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: programs/opinion-market
+
+      - name: Verify binary size
+        run: |
+          SIZE=$(stat -f%z programs/opinion-market/target/release/opinion_market.so 2>/dev/null || stat -c%s programs/opinion-market/target/release/opinion_market.so)
+          echo "Binary size: $((SIZE / 1024)) KB"
+          if [ $SIZE -gt 419430 ]; then
+            echo "Warning: Binary size increased significantly"
+          fi
