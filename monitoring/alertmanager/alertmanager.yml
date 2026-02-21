@@ -1,0 +1,124 @@
+global:
+  resolve_timeout: 5m
+  slack_api_url: ${SLACK_WEBHOOK_URL}
+  pagerduty_url: https://events.pagerduty.com/v2/enqueue
+  opsgenie_api_key: ${OPSGENIE_API_KEY}
+  opsgenie_api_url: https://api.opsgenie.com/
+
+route:
+  receiver: 'default'
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+
+  routes:
+    # Critical alerts - immediate page
+    - match:
+        severity: critical
+      receiver: 'critical-pagerduty'
+      group_wait: 0s
+      repeat_interval: 4h
+      continue: true
+
+    # High priority - Slack + email
+    - match:
+        severity: warning
+      receiver: 'warning-slack'
+      group_wait: 30s
+      repeat_interval: 24h
+
+    # Oracle-specific - dedicated channel
+    - match:
+        component: oracle
+      receiver: 'oracle-alerts'
+      group_wait: 10s
+      continue: true
+
+    # Contract-specific - contract team
+    - match:
+        component: contract
+      receiver: 'contract-alerts'
+      group_wait: 10s
+      continue: true
+
+    # API-specific - API team
+    - match:
+        component: api
+      receiver: 'api-alerts'
+      group_wait: 10s
+      continue: true
+
+inhibit_rules:
+  # Suppress warning if critical already firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'component', 'instance']
+
+  # Suppress if parent service is down
+  - source_match:
+      alertname: 'APIServerDown'
+    target_match:
+      component: 'api'
+    equal: ['instance']
+
+  # Don't alert on high latency if service is down
+  - source_match:
+      alertname: 'APIServerDown'
+    target_match:
+      alertname: 'APIHighLatency'
+    equal: ['instance']
+
+receivers:
+  # Critical alerts - page on-call
+  - name: 'critical-pagerduty'
+    pagerduty_configs:
+      - service_key: ${PAGERDUTY_SERVICE_KEY}
+        description: '{{ .GroupLabels.alertname }}'
+        details:
+          firing: '{{ template "pagerduty.default.instances" .Alerts.Firing }}'
+
+  # Warning alerts - Slack
+  - name: 'warning-slack'
+    slack_configs:
+      - channel: '#alerts-warning'
+        title: 'Warning Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts.Firing }}{{ .Annotations.description }}{{ end }}'
+        color: 'warning'
+        send_resolved: true
+
+  # Oracle-specific alerts
+  - name: 'oracle-alerts'
+    slack_configs:
+      - channel: '#oracle-operations'
+        title: 'Oracle Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts.Firing }}{{ .Annotations.summary }}\n{{ .Annotations.description }}{{ end }}'
+        color: 'danger'
+        send_resolved: true
+
+  # Contract-specific alerts
+  - name: 'contract-alerts'
+    slack_configs:
+      - channel: '#contract-monitoring'
+        title: 'Contract Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts.Firing }}{{ .Annotations.summary }}\n{{ .Annotations.description }}{{ end }}'
+        color: 'danger'
+        send_resolved: true
+
+  # API-specific alerts
+  - name: 'api-alerts'
+    slack_configs:
+      - channel: '#api-monitoring'
+        title: 'API Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts.Firing }}{{ .Annotations.summary }}\n{{ .Annotations.description }}{{ end }}'
+        color: 'danger'
+        send_resolved: true
+
+  # Default receiver
+  - name: 'default'
+    slack_configs:
+      - channel: '#general'
+        title: 'Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts.Firing }}{{ .Annotations.description }}{{ end }}'
