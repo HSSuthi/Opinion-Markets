@@ -4,10 +4,6 @@ members = [
 ]
 resolver = "2"
 
-# Work around broken constant_time_eq v0.4.2 on crates.io
-[patch.crates-io]
-constant_time_eq = { version = "=0.4.1" }
-
 [profile.release]
 overflow-checks = true
 lto = "fat"
