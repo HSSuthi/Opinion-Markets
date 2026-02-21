@@ -4,9 +4,6 @@ members = [
 ]
 resolver = "2"
 
-[patch.crates-io]
-constant_time_eq = { path = "vendor/constant_time_eq" }
-
 [profile.release]
 overflow-checks = true
 lto = "fat"
@@ -16,3 +13,10 @@ codegen-units = 1
 opt-level = 3
 incremental = false
 codegen-units = 1
+
+[patch.crates-io]
+# Force blake3 to v1.8.2 (the last version using Edition 2021)
+blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3", tag = "1.8.2" }
+
+# Force constant_time_eq to v0.3.1 (compatible with older compilers)
+constant_time_eq = { git = "https://github.com/cespare/constant_time_eq", tag = "v0.3.1" }
