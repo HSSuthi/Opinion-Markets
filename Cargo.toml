@@ -15,12 +15,4 @@ opt-level = 3
 incremental = false
 codegen-units = 1
 
-# Pin blake3 and constant_time_eq to versions compatible with Solana's bundled Rust compiler
-# Issue: constant_time_eq v0.4.2 (released Feb 20, 2026) requires Rust Edition 2024
-# The bundled Solana compiler doesn't support Edition 2024 feature in Cargo 1.79.0
-# Solution: Direct dependencies force specific versions in dependency resolution
-
-[dependencies]
-blake3 = "1.5.4"
-constant_time_eq = "0.3.1"
 
