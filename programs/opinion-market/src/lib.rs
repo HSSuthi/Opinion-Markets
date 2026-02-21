@@ -256,7 +256,7 @@ pub mod opinion_market {
         let market = &mut ctx.accounts.market;
         market.creator = ctx.accounts.creator.key();
         market.uuid = uuid;
-        market.statement = statement;
+        market.statement = statement.clone();
         market.created_at = clock.unix_timestamp;
         market.closes_at = clock.unix_timestamp + duration_secs as i64;
         market.state = MarketState::Active;
@@ -271,9 +271,9 @@ pub mod opinion_market {
         msg!("Market created: closes_at={}", market.closes_at);
 
         emit!(MarketCreatedEvent {
-            market: ctx.accounts.market.key(),
+            market: market.key(),
             creator: ctx.accounts.creator.key(),
-            statement: statement.clone(),
+            statement,
             closes_at: market.closes_at,
             duration_secs,
         });
@@ -326,7 +326,7 @@ pub mod opinion_market {
         market.staker_count = market.staker_count.saturating_add(1);
 
         emit!(OpinionStakedEvent {
-            market: ctx.accounts.market.key(),
+            market: market.key(),
             staker: ctx.accounts.staker.key(),
             stake_amount,
             ipfs_cid: ipfs_cid.clone(),
@@ -346,7 +346,7 @@ pub mod opinion_market {
         msg!("Market closed");
 
         emit!(MarketClosedEvent {
-            market: ctx.accounts.market.key(),
+            market: market.key(),
             closed_at: clock.unix_timestamp,
             total_stakers: market.staker_count,
             total_stake: market.total_stake,
@@ -376,7 +376,7 @@ pub mod opinion_market {
         msg!("Sentiment: score={} confidence={}", score, confidence);
 
         emit!(SentimentRecordedEvent {
-            market: ctx.accounts.market.key(),
+            market: market.key(),
             sentiment_score: score,
             confidence,
             summary_hash,
