@@ -4,6 +4,9 @@ members = [
 ]
 resolver = "2"
 
+# Override problematic git dependencies with released versions
+[patch.crates-io]
+base64ct = "1.6"
 
 [profile.release]
 overflow-checks = true
