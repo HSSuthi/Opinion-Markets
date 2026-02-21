@@ -43,7 +43,9 @@ async function main() {
 
   // ── 1. Check SOL balance ──────────────────────────────────────────────────
   let balance = await connection.getBalance(wallet.publicKey);
-  console.log(`SOL balance: ${(balance / anchor.web3.LAMPORTS_PER_SOL).toFixed(2)} SOL`);
+  console.log(
+    `SOL balance: ${(balance / anchor.web3.LAMPORTS_PER_SOL).toFixed(2)} SOL`
+  );
 
   if (balance < 0.5 * anchor.web3.LAMPORTS_PER_SOL) {
     console.log("Balance low — requesting airdrop of 2 SOL...");
@@ -53,7 +55,11 @@ async function main() {
     );
     await connection.confirmTransaction(sig);
     balance = await connection.getBalance(wallet.publicKey);
-    console.log(`New balance: ${(balance / anchor.web3.LAMPORTS_PER_SOL).toFixed(2)} SOL ✓`);
+    console.log(
+      `New balance: ${(balance / anchor.web3.LAMPORTS_PER_SOL).toFixed(
+        2
+      )} SOL ✓`
+    );
   } else {
     console.log("SOL balance OK ✓");
   }
@@ -68,14 +74,18 @@ async function main() {
   if (fs.existsSync(oracleKeyPath)) {
     const raw = JSON.parse(fs.readFileSync(oracleKeyPath, "utf-8")) as number[];
     oracleKeypair = anchor.web3.Keypair.fromSecretKey(Uint8Array.from(raw));
-    console.log(`\nOracle keypair found: ${oracleKeypair.publicKey.toBase58()} ✓`);
+    console.log(
+      `\nOracle keypair found: ${oracleKeypair.publicKey.toBase58()} ✓`
+    );
   } else {
     oracleKeypair = anchor.web3.Keypair.generate();
     fs.writeFileSync(
       oracleKeyPath,
       JSON.stringify(Array.from(oracleKeypair.secretKey))
     );
-    console.log(`\nOracle keypair generated: ${oracleKeypair.publicKey.toBase58()}`);
+    console.log(
+      `\nOracle keypair generated: ${oracleKeypair.publicKey.toBase58()}`
+    );
     console.log(`Saved to: ${oracleKeyPath} ✓`);
   }
 
