@@ -13,6 +13,7 @@ export interface Market {
   sentiment_score: number | null;
   confidence: number | null;
   summary_hash?: string;
+  crowd_score: number | null; // Volume-weighted mean of all agreement predictions
   winner?: string;
   updated_at: string;
 }
