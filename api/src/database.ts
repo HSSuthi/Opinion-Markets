@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import * as path from 'path';
 import { Market } from './entities/Market';
 import { Opinion } from './entities/Opinion';
+import { OpinionReaction } from './entities/OpinionReaction';
 import { Position } from './entities/Position';
 import { UserPortfolio } from './entities/UserPortfolio';
 
@@ -33,7 +34,7 @@ export const AppDataSource = new DataSource({
   url: databaseUrl,
   synchronize, // ⚠️ DANGEROUS in production - use migrations instead
   logging,
-  entities: [Market, Opinion, Position, UserPortfolio],
+  entities: [Market, Opinion, OpinionReaction, Position, UserPortfolio],
   migrations: [path.join(__dirname, 'migrations', '*.ts')],
   migrationsRun: false, // Manually run migrations
   subscribers: [],

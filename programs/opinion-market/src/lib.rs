@@ -15,6 +15,12 @@ pub const PROTOCOL_FEE_BPS: u64 = 1_000;
 pub const MAX_STATEMENT_LEN: usize = 280;
 pub const MAX_IPFS_CID_LEN: usize = 64;
 
+/// Triple-Check scoring formula weights (must sum to 100)
+/// S = (W × 0.5) + (C × 0.3) + (A × 0.2)
+pub const WEIGHT_MULTIPLIER: u64 = 50;     // 50% — Layer 1: peer backing
+pub const CONSENSUS_MULTIPLIER: u64 = 30;  // 30% — Layer 2: crowd alignment
+pub const AI_MULTIPLIER: u64 = 20;         // 20% — Layer 3: AI quality
+
 /// Duration options in seconds
 pub const DURATION_24H: u64 = 86_400;
 pub const DURATION_3D: u64 = 259_200;
@@ -52,6 +58,8 @@ pub enum OpinionError {
     InvalidScore,
     #[msg("Confidence must be 0 (low), 1 (medium), or 2 (high)")]
     InvalidConfidence,
+    #[msg("Prediction must be between 0 and 100")]
+    InvalidPrediction,
     #[msg("Unauthorized — only the oracle may call this")]
     Unauthorized,
     #[msg("USDC mint mismatch")]
@@ -64,6 +72,16 @@ pub enum OpinionError {
     MarketNotAwaitingRandomness,
     #[msg("VRF randomness has not been provided yet")]
     RandomnessNotReady,
+    #[msg("Cannot react to your own opinion")]
+    CannotReactToOwnOpinion,
+    #[msg("Market is not in Scored state awaiting settlement")]
+    MarketNotAwaitingSettlement,
+    #[msg("Payout has already been claimed")]
+    AlreadyPaid,
+    #[msg("Total combined score is zero — cannot distribute")]
+    ZeroTotalScore,
+    #[msg("Arithmetic overflow")]
+    Overflow,
 }
 
 // ── State Enums ──────────────────────────────────────────────────────────────
@@ -71,14 +89,19 @@ pub enum OpinionError {
 pub enum MarketState {
     Active,
     Closed,
-    Scored,
-    AwaitingRandomness, // Waiting for Chainlink VRF callback
+    Scored,             // Awaiting Triple-Check settlement
+    AwaitingRandomness, // Legacy: kept for backward compatibility
     Settled,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum ReactionType {
+    Back,   // Agree — adds to backing_total
+    Slash,  // Disagree — adds to slashing_total
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
-/// Emitted when a new opinion market is created
 #[event]
 pub struct MarketCreatedEvent {
     pub market: Pubkey,
@@ -88,17 +111,25 @@ pub struct MarketCreatedEvent {
     pub duration_secs: u64,
 }
 
-/// Emitted when a staker stakes an opinion on a market
 #[event]
 pub struct OpinionStakedEvent {
     pub market: Pubkey,
     pub staker: Pubkey,
     pub stake_amount: u64,
+    pub prediction: u8,
     pub ipfs_cid: String,
     pub total_stake_after: u64,
 }
 
-/// Emitted when a market transitions from Active to Closed
+#[event]
+pub struct ReactionSubmittedEvent {
+    pub market: Pubkey,
+    pub opinion: Pubkey,
+    pub reactor: Pubkey,
+    pub reaction_type: ReactionType,
+    pub stake_amount: u64,
+}
+
 #[event]
 pub struct MarketClosedEvent {
     pub market: Pubkey,
@@ -107,7 +138,6 @@ pub struct MarketClosedEvent {
     pub total_stake: u64,
 }
 
-/// Emitted when oracle records sentiment analysis
 #[event]
 pub struct SentimentRecordedEvent {
     pub market: Pubkey,
@@ -116,7 +146,43 @@ pub struct SentimentRecordedEvent {
     pub summary_hash: [u8; 32],
 }
 
-/// Emitted when lottery is settled and prize distributed
+#[event]
+pub struct AiScoreRecordedEvent {
+    pub market: Pubkey,
+    pub opinion: Pubkey,
+    pub staker: Pubkey,
+    pub ai_score: u8,
+}
+
+#[event]
+pub struct OpinionSettledEvent {
+    pub market: Pubkey,
+    pub opinion: Pubkey,
+    pub staker: Pubkey,
+    pub weight_score: u8,
+    pub consensus_score: u8,
+    pub ai_score: u8,
+    pub combined_score: u8,
+}
+
+#[event]
+pub struct MarketFinalizedEvent {
+    pub market: Pubkey,
+    pub total_pool: u64,
+    pub distributable_pool: u64,
+    pub protocol_fee: u64,
+    pub crowd_score: u8,
+}
+
+#[event]
+pub struct PayoutClaimedEvent {
+    pub market: Pubkey,
+    pub opinion: Pubkey,
+    pub staker: Pubkey,
+    pub payout_amount: u64,
+    pub combined_score: u8,
+}
+
 #[event]
 pub struct LotterySettledEvent {
     pub market: Pubkey,
@@ -125,7 +191,6 @@ pub struct LotterySettledEvent {
     pub protocol_fee: u64,
 }
 
-/// Emitted when Chainlink VRF randomness is requested
 #[event]
 pub struct VrfRandomnessRequestedEvent {
     pub market: Pubkey,
@@ -133,7 +198,6 @@ pub struct VrfRandomnessRequestedEvent {
     pub request_timestamp: i64,
 }
 
-/// Emitted when Chainlink VRF callback fulfills randomness
 #[event]
 pub struct VrfRandomnessFulfilledEvent {
     pub market: Pubkey,
@@ -146,12 +210,8 @@ pub struct VrfRandomnessFulfilledEvent {
 /// Global program configuration — initialized once by deployer
 #[account]
 pub struct ProgramConfig {
-    /// Multi-sig oracle authority (Squads V3, Safe, or other multi-sig contract)
-    /// For devnet: can be a single keypair; for mainnet: must be 3-of-5 multi-sig
     pub oracle_authority: Pubkey,
-    /// Wallet that receives creation fees + 10% protocol cut
     pub treasury: Pubkey,
-    /// USDC SPL token mint (devnet or mainnet)
     pub usdc_mint: Pubkey,
     pub bump: u8,
 }
@@ -164,22 +224,25 @@ impl ProgramConfig {
 #[account]
 pub struct Market {
     pub creator: Pubkey,
-    /// Random 16-byte UUID — part of PDA seed so one creator can make many markets
     pub uuid: [u8; 16],
     pub statement: String,
     pub created_at: i64,
     pub closes_at: i64,
     pub state: MarketState,
     pub staker_count: u32,
-    /// Total USDC staked in micro-USDC (6 decimals)
+    /// Total USDC staked in micro-USDC (6 decimals) — includes reactions
     pub total_stake: u64,
-    /// Sentiment score 0–100 (set after scoring)
+    /// Portion available after protocol fee (set at finalize_settlement)
+    pub distributable_pool: u64,
+    /// Volume-weighted mean of all agreement predictions (set at settlement)
+    pub crowd_score: u8,
+    /// Market-level AI sentiment score 0–100 (set by record_sentiment)
     pub sentiment_score: u8,
     /// 0 = low, 1 = medium, 2 = high
     pub confidence: u8,
     /// SHA-256 of the LLM summary string
     pub summary_hash: [u8; 32],
-    /// Winner's wallet pubkey (set after lottery)
+    /// Highest-earning staker (set after settlement for display)
     pub winner: Option<Pubkey>,
     pub bump: u8,
 }
@@ -195,6 +258,8 @@ impl Market {
         + 1   // state enum tag
         + 4   // staker_count
         + 8   // total_stake
+        + 8   // distributable_pool
+        + 1   // crowd_score
         + 1   // sentiment_score
         + 1   // confidence
         + 32  // summary_hash
@@ -202,7 +267,7 @@ impl Market {
         + 1;  // bump
 }
 
-/// A single staked opinion
+/// A single staked opinion — extended with Triple-Check scoring fields
 #[account]
 pub struct Opinion {
     pub market: Pubkey,
@@ -211,9 +276,34 @@ pub struct Opinion {
     pub stake_amount: u64,
     /// SHA-256 of opinion text (integrity proof)
     pub text_hash: [u8; 32],
-    /// Pinata/IPFS CID pointing to the full opinion text
+    /// IPFS CID pointing to full opinion text
     pub ipfs_cid: String,
     pub created_at: i64,
+
+    // ── Layer 2: Crowd Prediction ────────────────────────────────────────────
+    /// User's 0–100 agreement prediction submitted with stake
+    pub prediction: u8,
+
+    // ── Layer 1: Peer Backing ────────────────────────────────────────────────
+    /// Total USDC staked to Back (agree with) this opinion
+    pub backing_total: u64,
+    /// Total USDC staked to Slash (disagree with) this opinion
+    pub slashing_total: u64,
+
+    // ── Triple-Check Scores (set by oracle at settlement) ────────────────────
+    /// Layer 1 score: normalized net backing (0–100)
+    pub weight_score: u8,
+    /// Layer 2 score: closeness to crowd_score (0–100)
+    pub consensus_score: u8,
+    /// Layer 3 score: AI text quality rating (0–100)
+    pub ai_score: u8,
+    /// Final composite: W*50 + C*30 + A*20 stored as 0–100 (divide by 100 from 0–10000)
+    pub combined_score: u8,
+
+    // ── Payout ───────────────────────────────────────────────────────────────
+    pub payout_amount: u64,
+    pub paid: bool,
+
     pub bump: u8,
 }
 
@@ -226,20 +316,39 @@ impl Opinion {
         + 32  // text_hash
         + 4 + MAX_IPFS_CID_LEN // ipfs_cid
         + 8   // created_at
+        + 1   // prediction
+        + 8   // backing_total
+        + 8   // slashing_total
+        + 1   // weight_score
+        + 1   // consensus_score
+        + 1   // ai_score
+        + 1   // combined_score
+        + 8   // payout_amount
+        + 1   // paid
         + 1;  // bump
 }
 
-/// Tracks a pending Chainlink VRF randomness request
+/// Tracks a Back or Slash reaction from one user to another's opinion
+#[account]
+pub struct Reaction {
+    pub opinion: Pubkey,
+    pub reactor: Pubkey,
+    pub reaction_type: ReactionType,
+    pub stake_amount: u64,
+    pub bump: u8,
+}
+
+impl Reaction {
+    pub const SPACE: usize = 8 + 32 + 32 + 1 + 8 + 1;
+}
+
+/// Tracks a pending Chainlink VRF randomness request (legacy)
 #[account]
 pub struct VrfRequest {
     pub market: Pubkey,
-    /// Request ID from Chainlink VRF
     pub request_id: u64,
-    /// Randomness value once fulfilled (32 bytes from Chainlink)
     pub randomness: Option<[u8; 32]>,
-    /// Timestamp when request was made
     pub requested_at: i64,
-    /// Timestamp when randomness was fulfilled (if fulfilled)
     pub fulfilled_at: Option<i64>,
     pub bump: u8,
 }
@@ -261,10 +370,6 @@ pub mod opinion_market {
     use super::*;
 
     /// Initialize global config — called once by deployer
-    ///
-    /// DEVNET: oracle_authority can be a single keypair for testing
-    /// MAINNET: oracle_authority MUST be a verified 3-of-5 multi-sig wallet address
-    ///          Recommended: Squads V3 (https://squads.so) or Safe
     pub fn initialize(
         ctx: Context<InitializeConfig>,
         oracle_authority: Pubkey,
@@ -293,7 +398,6 @@ pub mod opinion_market {
             OpinionError::InvalidDuration
         );
 
-        // Transfer $5 USDC from creator → treasury
         let cpi_ctx = CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
@@ -316,13 +420,13 @@ pub mod opinion_market {
         market.state = MarketState::Active;
         market.staker_count = 0;
         market.total_stake = 0;
+        market.distributable_pool = 0;
+        market.crowd_score = 0;
         market.sentiment_score = 0;
         market.confidence = 0;
         market.summary_hash = [0u8; 32];
         market.winner = None;
         market.bump = ctx.bumps.market;
-
-        msg!("Market created: closes_at={}", market.closes_at);
 
         emit!(MarketCreatedEvent {
             market: market_key,
@@ -336,15 +440,18 @@ pub mod opinion_market {
     }
 
     /// Stake a USDC-backed opinion on a market ($0.50–$10).
+    /// Now includes a 0–100 agreement prediction for the crowd consensus layer.
     pub fn stake_opinion(
         ctx: Context<StakeOpinion>,
         stake_amount: u64,
         text_hash: [u8; 32],
         ipfs_cid: String,
+        prediction: u8,
     ) -> Result<()> {
         require!(stake_amount >= MIN_STAKE, OpinionError::StakeTooSmall);
         require!(stake_amount <= MAX_STAKE, OpinionError::StakeTooLarge);
         require!(ipfs_cid.len() <= MAX_IPFS_CID_LEN, OpinionError::CidTooLong);
+        require!(prediction <= 100, OpinionError::InvalidPrediction);
 
         let clock = Clock::get()?;
         {
@@ -353,7 +460,6 @@ pub mod opinion_market {
             require!(clock.unix_timestamp < market.closes_at, OpinionError::MarketExpired);
         }
 
-        // Transfer stake from staker → market escrow
         let cpi_ctx = CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
@@ -375,22 +481,109 @@ pub mod opinion_market {
         opinion.text_hash = text_hash;
         opinion.ipfs_cid = ipfs_cid.clone();
         opinion.created_at = clock.unix_timestamp;
+        opinion.prediction = prediction;
+        // Author's own stake counts as initial backing for Layer 1
+        opinion.backing_total = stake_amount;
+        opinion.slashing_total = 0;
+        opinion.weight_score = 0;
+        opinion.consensus_score = 0;
+        opinion.ai_score = 0;
+        opinion.combined_score = 0;
+        opinion.payout_amount = 0;
+        opinion.paid = false;
         opinion.bump = ctx.bumps.opinion;
-
-        msg!("Opinion staked: staker={} amount={} cid={}", staker_key, stake_amount, ipfs_cid);
 
         let market = &mut ctx.accounts.market;
         market.total_stake = market.total_stake.saturating_add(stake_amount);
         market.staker_count = market.staker_count.saturating_add(1);
-
         let total_stake_after = market.total_stake;
 
         emit!(OpinionStakedEvent {
             market: market_key,
             staker: staker_key,
             stake_amount,
+            prediction,
             ipfs_cid: ipfs_cid_for_event,
             total_stake_after,
+        });
+
+        Ok(())
+    }
+
+    /// Back or Slash another user's opinion — Layer 1 of the Triple-Check.
+    /// Reactor's stake goes into the escrow and affects the opinion's weight score.
+    pub fn react_to_opinion(
+        ctx: Context<ReactToOpinion>,
+        reaction_type: ReactionType,
+        stake_amount: u64,
+    ) -> Result<()> {
+        require!(stake_amount >= MIN_STAKE, OpinionError::StakeTooSmall);
+        require!(stake_amount <= MAX_STAKE, OpinionError::StakeTooLarge);
+
+        let clock = Clock::get()?;
+        {
+            let market = &ctx.accounts.market;
+            require!(market.state == MarketState::Active, OpinionError::MarketNotActive);
+            require!(clock.unix_timestamp < market.closes_at, OpinionError::MarketExpired);
+        }
+
+        // Cannot react to your own opinion
+        require!(
+            ctx.accounts.reactor.key() != ctx.accounts.opinion.staker,
+            OpinionError::CannotReactToOwnOpinion
+        );
+
+        // Transfer reaction stake into market escrow
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.reactor_usdc.to_account_info(),
+                to: ctx.accounts.escrow_token_account.to_account_info(),
+                authority: ctx.accounts.reactor.to_account_info(),
+            },
+        );
+        token::transfer(cpi_ctx, stake_amount)?;
+
+        let market_key = ctx.accounts.market.key();
+        let opinion_key = ctx.accounts.opinion.key();
+        let reactor_key = ctx.accounts.reactor.key();
+        let reaction_type_for_event = reaction_type.clone();
+
+        // Update opinion's backing or slashing total
+        let opinion = &mut ctx.accounts.opinion;
+        match reaction_type {
+            ReactionType::Back => {
+                opinion.backing_total = opinion.backing_total
+                    .checked_add(stake_amount)
+                    .ok_or(OpinionError::Overflow)?;
+            }
+            ReactionType::Slash => {
+                opinion.slashing_total = opinion.slashing_total
+                    .checked_add(stake_amount)
+                    .ok_or(OpinionError::Overflow)?;
+            }
+        }
+
+        // Store reaction record (one per reactor per opinion — enforced by PDA seeds)
+        let reaction = &mut ctx.accounts.reaction;
+        reaction.opinion = opinion_key;
+        reaction.reactor = reactor_key;
+        reaction.reaction_type = reaction_type.clone();
+        reaction.stake_amount = stake_amount;
+        reaction.bump = ctx.bumps.reaction;
+
+        // Add to market total pool
+        let market = &mut ctx.accounts.market;
+        market.total_stake = market.total_stake
+            .checked_add(stake_amount)
+            .ok_or(OpinionError::Overflow)?;
+
+        emit!(ReactionSubmittedEvent {
+            market: market_key,
+            opinion: opinion_key,
+            reactor: reactor_key,
+            reaction_type: reaction_type_for_event,
+            stake_amount,
         });
 
         Ok(())
@@ -406,7 +599,6 @@ pub mod opinion_market {
         market.state = MarketState::Closed;
         let staker_count = market.staker_count;
         let total_stake = market.total_stake;
-        msg!("Market closed");
 
         emit!(MarketClosedEvent {
             market: market_key,
@@ -418,7 +610,8 @@ pub mod opinion_market {
         Ok(())
     }
 
-    /// Oracle writes LLM sentiment score on-chain. Restricted to oracle keypair.
+    /// Oracle records the market-level AI sentiment score.
+    /// Also transitions the market to Scored (ready for per-opinion settlement).
     pub fn record_sentiment(
         ctx: Context<RecordSentiment>,
         score: u8,
@@ -436,8 +629,6 @@ pub mod opinion_market {
         market.summary_hash = summary_hash;
         market.state = MarketState::Scored;
 
-        msg!("Sentiment: score={} confidence={}", score, confidence);
-
         emit!(SentimentRecordedEvent {
             market: ctx.accounts.market.key(),
             sentiment_score: score,
@@ -448,146 +639,119 @@ pub mod opinion_market {
         Ok(())
     }
 
-    /// Request Chainlink VRF randomness for lottery winner selection.
-    /// Called by oracle after recording sentiment. Market transitions to AwaitingRandomness.
-    ///
-    /// On mainnet: This calls the actual Chainlink VRF contract to request randomness.
-    /// On devnet: This is mocked for testing purposes.
-    pub fn request_vrf_randomness(ctx: Context<RequestVrfRandomness>) -> Result<()> {
+    /// Oracle records the AI quality score for a single opinion — Layer 3.
+    /// Called once per opinion before settle_opinion.
+    pub fn record_ai_score(
+        ctx: Context<RecordAiScore>,
+        ai_score: u8,
+    ) -> Result<()> {
+        require!(ai_score <= 100, OpinionError::InvalidScore);
+
         let market = &ctx.accounts.market;
         require!(market.state == MarketState::Scored, OpinionError::MarketNotScored);
 
-        let clock = Clock::get()?;
-        let market_key = market.key();
+        let opinion = &mut ctx.accounts.opinion;
+        opinion.ai_score = ai_score;
 
-        // In production, this would call Chainlink VRF contract via CPI
-        // For now, we generate a mock request ID based on blockhash
-        let request_id = clock.slot;
-
-        let vrf_request = &mut ctx.accounts.vrf_request;
-        vrf_request.market = market_key;
-        vrf_request.request_id = request_id;
-        vrf_request.randomness = None;
-        vrf_request.requested_at = clock.unix_timestamp;
-        vrf_request.fulfilled_at = None;
-        vrf_request.bump = ctx.bumps.vrf_request;
-
-        // Update market state to await randomness
-        let market = &mut ctx.accounts.market;
-        market.state = MarketState::AwaitingRandomness;
-
-        msg!("VRF randomness requested for market: request_id={}", request_id);
-
-        emit!(VrfRandomnessRequestedEvent {
-            market: market_key,
-            vrf_request_id: request_id,
-            request_timestamp: clock.unix_timestamp,
+        emit!(AiScoreRecordedEvent {
+            market: ctx.accounts.market.key(),
+            opinion: ctx.accounts.opinion.key(),
+            staker: opinion.staker,
+            ai_score,
         });
 
         Ok(())
     }
 
-    /// Fulfill Chainlink VRF randomness callback. Called by Chainlink VRF contract.
-    /// Uses the randomness to select a proportional winner and settle the market.
+    /// Oracle settles a single opinion by applying the Triple-Check formula.
+    /// Called once per opinion after all AI scores are recorded.
     ///
-    /// MAINNET: Only the Chainlink VRF contract can call this via authorized callback.
-    /// DEVNET: Anyone can call this for testing (in production, would be restricted).
-    pub fn fulfill_vrf_randomness(
-        ctx: Context<FulfillVrfRandomness>,
-        randomness: [u8; 32],
+    /// Oracle computes off-chain:
+    ///   crowd_score = Σ(prediction_i × amount_i) / Σ(amount_i)
+    ///   weight_score_i = max(5, (netBacking_i - minNet) / range × 95 + 5)
+    ///   consensus_score_i = max(0, 100 - |prediction_i - crowd_score|)
+    ///
+    /// On-chain we compute:
+    ///   combined_bps = weight*50 + consensus*30 + ai*20  (range 0–10000)
+    ///   combined_score = combined_bps / 100              (stored 0–100)
+    pub fn settle_opinion(
+        ctx: Context<SettleOpinion>,
+        crowd_score: u8,
+        weight_score: u8,
+        consensus_score: u8,
     ) -> Result<()> {
-        let market = &ctx.accounts.market;
-        require!(
-            market.state == MarketState::AwaitingRandomness,
-            OpinionError::MarketNotAwaitingRandomness
-        );
-        require!(market.total_stake > 0, OpinionError::EmptyPrizePool);
+        require!(crowd_score <= 100, OpinionError::InvalidScore);
+        require!(weight_score <= 100, OpinionError::InvalidScore);
+        require!(consensus_score <= 100, OpinionError::InvalidScore);
 
-        let clock = Clock::get()?;
+        let market = &mut ctx.accounts.market;
+        require!(market.state == MarketState::Scored, OpinionError::MarketNotScored);
 
-        // Store randomness in VrfRequest account
-        let vrf_request = &mut ctx.accounts.vrf_request;
-        vrf_request.randomness = Some(randomness);
-        vrf_request.fulfilled_at = Some(clock.unix_timestamp);
+        // Store crowd_score on market — idempotent, same value every call
+        market.crowd_score = crowd_score;
 
-        let market_key = market.key();
+        let opinion = &mut ctx.accounts.opinion;
+        opinion.weight_score = weight_score;
+        opinion.consensus_score = consensus_score;
 
-        msg!("VRF randomness fulfilled for market: randomness={:?}", randomness);
+        // S = (W × 0.5) + (C × 0.3) + (A × 0.2)
+        // Computed as integer basis points (0–10000), then divided by 100
+        let combined_bps: u64 =
+            (weight_score as u64)
+                .checked_mul(WEIGHT_MULTIPLIER)
+                .ok_or(OpinionError::Overflow)?
+            .checked_add(
+                (consensus_score as u64)
+                    .checked_mul(CONSENSUS_MULTIPLIER)
+                    .ok_or(OpinionError::Overflow)?
+            )
+            .ok_or(OpinionError::Overflow)?
+            .checked_add(
+                (opinion.ai_score as u64)
+                    .checked_mul(AI_MULTIPLIER)
+                    .ok_or(OpinionError::Overflow)?
+            )
+            .ok_or(OpinionError::Overflow)?;
 
-        emit!(VrfRandomnessFulfilledEvent {
-            market: market_key,
-            vrf_request_id: vrf_request.request_id,
-            randomness,
+        opinion.combined_score = (combined_bps / 100) as u8;
+
+        emit!(OpinionSettledEvent {
+            market: ctx.accounts.market.key(),
+            opinion: ctx.accounts.opinion.key(),
+            staker: opinion.staker,
+            weight_score,
+            consensus_score,
+            ai_score: opinion.ai_score,
+            combined_score: opinion.combined_score,
         });
-
-        // Calculate prize distribution
-        let total_stake = market.total_stake;
-        let protocol_fee = total_stake
-            .checked_mul(PROTOCOL_FEE_BPS)
-            .unwrap()
-            .checked_div(10_000)
-            .unwrap();
-        let prize_pool = total_stake.checked_sub(protocol_fee).unwrap();
-
-        // Convert randomness to u64 for weighted selection
-        let mut seed = [0u8; 8];
-        seed.copy_from_slice(&randomness[0..8]);
-        let random_value = u64::from_le_bytes(seed);
-
-        // Deterministically select winner based on randomness and staker weights
-        // This would need to iterate through all Opinion accounts for the market
-        // For now, we pass control to run_lottery_with_vrf to handle the actual settlement
-        // The winner selection logic would go here in production
-
-        msg!("Settlement calculations: total_stake={} protocol_fee={} prize_pool={} random_value={}",
-            total_stake, protocol_fee, prize_pool, random_value);
 
         Ok(())
     }
 
-    /// Distribute prize pool using VRF-selected winner.
-    /// Must be called after fulfill_vrf_randomness, or use oracle-selected path with run_lottery.
-    pub fn run_lottery_with_vrf(
-        ctx: Context<RunLotteryWithVrf>,
-        winner_pubkey: Pubkey,
-    ) -> Result<()> {
-        // Validate winner account ownership
-        require!(
-            ctx.accounts.winner_token_account.owner == winner_pubkey,
-            OpinionError::Unauthorized
-        );
-
+    /// Oracle calls this once after all opinions are settled.
+    /// Deducts protocol fee, stores distributable_pool, transitions to Settled.
+    /// Also sends protocol fee to treasury.
+    pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
         let market = &ctx.accounts.market;
-        require!(
-            market.state == MarketState::AwaitingRandomness,
-            OpinionError::MarketNotAwaitingRandomness
-        );
-
-        // Verify randomness was fulfilled
-        let vrf_request = &ctx.accounts.vrf_request;
-        require!(
-            vrf_request.randomness.is_some(),
-            OpinionError::RandomnessNotReady
-        );
-
+        require!(market.state == MarketState::Scored, OpinionError::MarketNotScored);
         require!(market.total_stake > 0, OpinionError::EmptyPrizePool);
 
         let total_stake = market.total_stake;
         let protocol_fee = total_stake
             .checked_mul(PROTOCOL_FEE_BPS)
-            .unwrap()
+            .ok_or(OpinionError::Overflow)?
             .checked_div(10_000)
-            .unwrap();
-        let prize_pool = total_stake.checked_sub(protocol_fee).unwrap();
+            .ok_or(OpinionError::Overflow)?;
+        let distributable_pool = total_stake
+            .checked_sub(protocol_fee)
+            .ok_or(OpinionError::Overflow)?;
 
+        // Send protocol fee to treasury
         let market_uuid = market.uuid;
         let market_bump = market.bump;
-
-        // Market PDA is the authority over the escrow token account
         let seeds: &[&[u8]] = &[b"market", &market_uuid, &[market_bump]];
         let signer_seeds = &[seeds];
 
-        // Transfer 10% protocol fee to treasury
         let fee_cpi = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
@@ -599,43 +763,87 @@ pub mod opinion_market {
         );
         token::transfer(fee_cpi, protocol_fee)?;
 
-        // Transfer 90% prize pool to VRF-selected winner
-        let prize_cpi = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.escrow_token_account.to_account_info(),
-                to: ctx.accounts.winner_token_account.to_account_info(),
-                authority: ctx.accounts.market.to_account_info(),
-            },
-            signer_seeds,
-        );
-        token::transfer(prize_cpi, prize_pool)?;
-
+        let market_key = ctx.accounts.market.key();
         let market = &mut ctx.accounts.market;
-        market.winner = Some(winner_pubkey);
+        market.distributable_pool = distributable_pool;
         market.state = MarketState::Settled;
 
-        msg!("VRF Lottery settled: winner={} prize={} fee={}", winner_pubkey, prize_pool, protocol_fee);
-
-        emit!(LotterySettledEvent {
-            market: ctx.accounts.market.key(),
-            winner: winner_pubkey,
-            prize_amount: prize_pool,
+        emit!(MarketFinalizedEvent {
+            market: market_key,
+            total_pool: total_stake,
+            distributable_pool,
             protocol_fee,
+            crowd_score: market.crowd_score,
         });
 
         Ok(())
     }
 
-    /// Distribute prize pool. Oracle supplies the winner's pubkey and token account.
+    /// Staker claims their proportional payout after settlement.
+    /// payout = (combined_score / total_combined_score) × distributable_pool
     ///
-    /// DEVNET: Oracle selects winner proportionally off-chain using recent
-    /// blockhash as randomness seed.
-    ///
-    /// MAINNET: This is the fallback path. For normal mainnet operation, use the
-    /// VRF path: request_vrf_randomness → fulfill_vrf_randomness → run_lottery_with_vrf
+    /// total_combined_score is passed by the oracle (computed off-chain from all opinions).
+    pub fn claim_payout(
+        ctx: Context<ClaimPayout>,
+        total_combined_score: u64,
+    ) -> Result<()> {
+        let market = &ctx.accounts.market;
+        require!(market.state == MarketState::Settled, OpinionError::MarketNotAwaitingSettlement);
+
+        let opinion = &ctx.accounts.opinion;
+        require!(!opinion.paid, OpinionError::AlreadyPaid);
+        require!(total_combined_score > 0, OpinionError::ZeroTotalScore);
+
+        let distributable_pool = market.distributable_pool;
+        let combined_score = opinion.combined_score as u64;
+
+        // payout = combined_score × distributable_pool / total_combined_score
+        let payout = combined_score
+            .checked_mul(distributable_pool)
+            .ok_or(OpinionError::Overflow)?
+            .checked_div(total_combined_score)
+            .ok_or(OpinionError::Overflow)?;
+
+        let market_uuid = market.uuid;
+        let market_bump = market.bump;
+        let seeds: &[&[u8]] = &[b"market", &market_uuid, &[market_bump]];
+        let signer_seeds = &[seeds];
+
+        let payout_cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.escrow_token_account.to_account_info(),
+                to: ctx.accounts.staker_usdc.to_account_info(),
+                authority: ctx.accounts.market.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::transfer(payout_cpi, payout)?;
+
+        let opinion = &mut ctx.accounts.opinion;
+        opinion.payout_amount = payout;
+        opinion.paid = true;
+
+        // If this is the highest-earning staker, record as market winner for display
+        let market = &mut ctx.accounts.market;
+        if market.winner.is_none() {
+            market.winner = Some(opinion.staker);
+        }
+
+        emit!(PayoutClaimedEvent {
+            market: ctx.accounts.market.key(),
+            opinion: ctx.accounts.opinion.key(),
+            staker: opinion.staker,
+            payout_amount: payout,
+            combined_score: opinion.combined_score,
+        });
+
+        Ok(())
+    }
+
+    /// Distribute prize pool (legacy single-winner path).
+    /// Kept for backward compatibility. New markets should use settle_opinion + claim_payout.
     pub fn run_lottery(ctx: Context<RunLottery>, winner_pubkey: Pubkey) -> Result<()> {
-        // Validate winner account ownership to prevent oracle from passing arbitrary accounts
         require!(
             ctx.accounts.winner_token_account.owner == winner_pubkey,
             OpinionError::Unauthorized
@@ -653,17 +861,11 @@ pub mod opinion_market {
             .unwrap();
         let prize_pool = total_stake.checked_sub(protocol_fee).unwrap();
 
-        msg!("Settlement calculations: total_stake={} protocol_fee={} prize_pool={}",
-            total_stake, protocol_fee, prize_pool);
-
         let market_uuid = market.uuid;
         let market_bump = market.bump;
-
-        // Market PDA is the authority over the escrow token account
         let seeds: &[&[u8]] = &[b"market", &market_uuid, &[market_bump]];
         let signer_seeds = &[seeds];
 
-        // Transfer 10% protocol fee to treasury
         let fee_cpi = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
@@ -675,7 +877,6 @@ pub mod opinion_market {
         );
         token::transfer(fee_cpi, protocol_fee)?;
 
-        // Transfer 90% prize pool to winner
         let prize_cpi = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
@@ -691,8 +892,6 @@ pub mod opinion_market {
         market.winner = Some(winner_pubkey);
         market.state = MarketState::Settled;
 
-        msg!("Lottery settled: winner={} prize={} fee={}", winner_pubkey, prize_pool, protocol_fee);
-
         emit!(LotterySettledEvent {
             market: ctx.accounts.market.key(),
             winner: winner_pubkey,
@@ -703,29 +902,23 @@ pub mod opinion_market {
         Ok(())
     }
 
-    /// Allow stakers to recover their stake if market is abandoned (not settled after 14 days).
-    /// This is an escape hatch mechanism to prevent funds from being locked forever.
+    /// Allow stakers to recover their stake if market is abandoned (14+ days after close).
     pub fn recover_stake(ctx: Context<RecoverStake>) -> Result<()> {
         let clock = Clock::get()?;
         let market = &ctx.accounts.market;
 
-        // Market must have been closed for at least 14 days
         require!(
             clock.unix_timestamp >= market.closes_at + RECOVERY_PERIOD,
-            OpinionError::MarketNotExpired  // Reusing error: not enough time has passed
+            OpinionError::MarketNotExpired
         );
-
-        // Only allow recovery from markets that are NOT already settled
-        // (settled markets already distributed funds)
         require!(
             market.state != MarketState::Settled,
-            OpinionError::MarketNotActive  // Reusing error: cannot recover from settled market
+            OpinionError::MarketNotActive
         );
 
         let opinion = &ctx.accounts.opinion;
         let stake_amount = opinion.stake_amount;
 
-        // Transfer stake from escrow back to staker
         let market_uuid = market.uuid;
         let market_bump = market.bump;
         let seeds: &[&[u8]] = &[b"market", &market_uuid, &[market_bump]];
@@ -786,7 +979,6 @@ pub struct CreateMarket<'info> {
     )]
     pub market: Account<'info, Market>,
 
-    /// Escrow token account owned by the market PDA
     #[account(
         init,
         payer = creator,
@@ -797,7 +989,6 @@ pub struct CreateMarket<'info> {
     )]
     pub escrow_token_account: Account<'info, TokenAccount>,
 
-    /// Creator's USDC token account (source of creation fee)
     #[account(
         mut,
         constraint = creator_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
@@ -805,7 +996,6 @@ pub struct CreateMarket<'info> {
     )]
     pub creator_usdc: Account<'info, TokenAccount>,
 
-    /// Treasury USDC token account (receives creation fee)
     #[account(
         mut,
         constraint = treasury_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
@@ -836,7 +1026,6 @@ pub struct StakeOpinion<'info> {
     )]
     pub market: Account<'info, Market>,
 
-    /// Escrow receives the stake
     #[account(
         mut,
         seeds = [b"escrow", market.key().as_ref()],
@@ -853,13 +1042,61 @@ pub struct StakeOpinion<'info> {
     )]
     pub opinion: Account<'info, Opinion>,
 
-    /// Staker's USDC token account (source of stake)
     #[account(
         mut,
         constraint = staker_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
         constraint = staker_usdc.owner == staker.key(),
     )]
     pub staker_usdc: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ReactToOpinion<'info> {
+    #[account(mut)]
+    pub reactor: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"market", market.uuid.as_ref()],
+        bump = market.bump,
+    )]
+    pub market: Account<'info, Market>,
+
+    #[account(
+        mut,
+        constraint = opinion.market == market.key(),
+    )]
+    pub opinion: Account<'info, Opinion>,
+
+    /// One reaction per (reactor, opinion) — enforced by PDA seeds
+    #[account(
+        init,
+        payer = reactor,
+        space = Reaction::SPACE,
+        seeds = [b"reaction", opinion.key().as_ref(), reactor.key().as_ref()],
+        bump,
+    )]
+    pub reaction: Account<'info, Reaction>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", market.key().as_ref()],
+        bump,
+    )]
+    pub escrow_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = reactor_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
+        constraint = reactor_usdc.owner == reactor.key(),
+    )]
+    pub reactor_usdc: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -880,9 +1117,6 @@ pub struct CloseMarket<'info> {
 
 #[derive(Accounts)]
 pub struct RecordSentiment<'info> {
-    /// Must be the registered oracle_authority (multi-sig on mainnet)
-    /// For devnet: can be a single keypair signer
-    /// For mainnet: must be signed by the multi-sig contract (Squads V3, etc)
     #[account(constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
     pub oracle_authority: Signer<'info>,
 
@@ -898,8 +1132,24 @@ pub struct RecordSentiment<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RunLottery<'info> {
-    /// Must be the registered oracle_authority (multi-sig on mainnet)
+pub struct RecordAiScore<'info> {
+    #[account(constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
+    pub oracle_authority: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    pub market: Account<'info, Market>,
+
+    #[account(
+        mut,
+        constraint = opinion.market == market.key(),
+    )]
+    pub opinion: Account<'info, Opinion>,
+}
+
+#[derive(Accounts)]
+pub struct SettleOpinion<'info> {
     #[account(constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
     pub oracle_authority: Signer<'info>,
 
@@ -913,7 +1163,28 @@ pub struct RunLottery<'info> {
     )]
     pub market: Account<'info, Market>,
 
-    /// Escrow holding all stakes
+    #[account(
+        mut,
+        constraint = opinion.market == market.key(),
+    )]
+    pub opinion: Account<'info, Opinion>,
+}
+
+#[derive(Accounts)]
+pub struct FinalizeSettlement<'info> {
+    #[account(constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
+    pub oracle_authority: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"market", market.uuid.as_ref()],
+        bump = market.bump,
+    )]
+    pub market: Account<'info, Market>,
+
     #[account(
         mut,
         seeds = [b"escrow", market.key().as_ref()],
@@ -921,15 +1192,83 @@ pub struct RunLottery<'info> {
     )]
     pub escrow_token_account: Account<'info, TokenAccount>,
 
-    /// Winner's USDC token account — oracle has computed winner proportionally
-    /// Winner pubkey is passed as instruction parameter to enable validation
+    #[account(
+        mut,
+        constraint = treasury_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
+        constraint = treasury_usdc.owner == config.treasury @ OpinionError::TreasuryMismatch,
+    )]
+    pub treasury_usdc: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimPayout<'info> {
+    #[account(mut)]
+    pub staker: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"market", market.uuid.as_ref()],
+        bump = market.bump,
+    )]
+    pub market: Account<'info, Market>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", market.key().as_ref()],
+        bump,
+    )]
+    pub escrow_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = opinion.market == market.key(),
+        constraint = opinion.staker == staker.key() @ OpinionError::Unauthorized,
+    )]
+    pub opinion: Account<'info, Opinion>,
+
+    #[account(
+        mut,
+        constraint = staker_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
+        constraint = staker_usdc.owner == staker.key(),
+    )]
+    pub staker_usdc: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct RunLottery<'info> {
+    #[account(constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
+    pub oracle_authority: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"market", market.uuid.as_ref()],
+        bump = market.bump,
+    )]
+    pub market: Account<'info, Market>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", market.key().as_ref()],
+        bump,
+    )]
+    pub escrow_token_account: Account<'info, TokenAccount>,
+
     #[account(
         mut,
         constraint = winner_token_account.mint == config.usdc_mint @ OpinionError::MintMismatch,
     )]
     pub winner_token_account: Account<'info, TokenAccount>,
 
-    /// Treasury receives 10% protocol fee
     #[account(
         mut,
         constraint = treasury_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
@@ -954,7 +1293,6 @@ pub struct RecoverStake<'info> {
     )]
     pub market: Account<'info, Market>,
 
-    /// Escrow account holding stakes
     #[account(
         mut,
         seeds = [b"escrow", market.key().as_ref()],
@@ -962,121 +1300,18 @@ pub struct RecoverStake<'info> {
     )]
     pub escrow_token_account: Account<'info, TokenAccount>,
 
-    /// The staker's opinion on this market
     #[account(
         seeds = [b"opinion", market.key().as_ref(), staker.key().as_ref()],
         bump = opinion.bump,
     )]
     pub opinion: Account<'info, Opinion>,
 
-    /// Staker's USDC token account (receives recovered stake)
     #[account(
         mut,
         constraint = staker_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
         constraint = staker_usdc.owner == staker.key(),
     )]
     pub staker_usdc: Account<'info, TokenAccount>,
-
-    pub token_program: Program<'info, Token>,
-}
-
-#[derive(Accounts)]
-pub struct RequestVrfRandomness<'info> {
-    /// Must be the registered oracle_authority (multi-sig on mainnet)
-    #[account(mut, constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
-    pub oracle_authority: Signer<'info>,
-
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, ProgramConfig>,
-
-    #[account(
-        mut,
-        seeds = [b"market", market.uuid.as_ref()],
-        bump = market.bump,
-    )]
-    pub market: Account<'info, Market>,
-
-    /// VRF request account to track the pending randomness request
-    #[account(
-        init,
-        payer = oracle_authority,
-        space = VrfRequest::SPACE,
-        seeds = [b"vrf_request", market.key().as_ref()],
-        bump,
-    )]
-    pub vrf_request: Account<'info, VrfRequest>,
-
-    pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
-}
-
-#[derive(Accounts)]
-pub struct FulfillVrfRandomness<'info> {
-    /// CHECK: In production, this would be the Chainlink VRF contract.
-    /// On devnet, we allow any account to fulfill for testing purposes.
-    /// On mainnet, this should be restricted to the actual VRF contract.
-    pub vrf_callback: UncheckedAccount<'info>,
-
-    #[account(
-        mut,
-        seeds = [b"market", market.uuid.as_ref()],
-        bump = market.bump,
-    )]
-    pub market: Account<'info, Market>,
-
-    #[account(
-        mut,
-        seeds = [b"vrf_request", market.key().as_ref()],
-        bump = vrf_request.bump,
-    )]
-    pub vrf_request: Account<'info, VrfRequest>,
-}
-
-#[derive(Accounts)]
-pub struct RunLotteryWithVrf<'info> {
-    /// Must be the registered oracle_authority (multi-sig on mainnet)
-    #[account(constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
-    pub oracle_authority: Signer<'info>,
-
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, ProgramConfig>,
-
-    #[account(
-        mut,
-        seeds = [b"market", market.uuid.as_ref()],
-        bump = market.bump,
-    )]
-    pub market: Account<'info, Market>,
-
-    /// VRF request must be fulfilled before settling
-    #[account(
-        seeds = [b"vrf_request", market.key().as_ref()],
-        bump = vrf_request.bump,
-    )]
-    pub vrf_request: Account<'info, VrfRequest>,
-
-    /// Escrow holding all stakes
-    #[account(
-        mut,
-        seeds = [b"escrow", market.key().as_ref()],
-        bump,
-    )]
-    pub escrow_token_account: Account<'info, TokenAccount>,
-
-    /// Winner's USDC token account
-    #[account(
-        mut,
-        constraint = winner_token_account.mint == config.usdc_mint @ OpinionError::MintMismatch,
-    )]
-    pub winner_token_account: Account<'info, TokenAccount>,
-
-    /// Treasury receives 10% protocol fee
-    #[account(
-        mut,
-        constraint = treasury_usdc.mint == config.usdc_mint @ OpinionError::MintMismatch,
-        constraint = treasury_usdc.owner == config.treasury @ OpinionError::TreasuryMismatch,
-    )]
-    pub treasury_usdc: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
 }

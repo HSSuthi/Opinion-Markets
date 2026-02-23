@@ -26,46 +26,52 @@ export enum MarketState {
 @Index(['total_stake', 'state'])
 export class Market {
   @PrimaryColumn('varchar')
-  id: string; // Solana PDA address
+  id: string;
 
   @Column('uuid', { unique: true })
   uuid: string;
 
   @Column('varchar')
-  creator_address: string; // Wallet address of market creator
+  creator_address: string;
 
   @Column('text')
-  statement: string; // Market statement/question
+  statement: string;
 
   @CreateDateColumn()
   created_at: Date;
 
   @Column('timestamp')
-  closes_at: Date; // When staking ends
+  closes_at: Date;
 
   @Column('varchar', { enum: MarketState, default: MarketState.ACTIVE })
   state: MarketState;
 
   @Column('bigint', { default: 0 })
-  total_stake: number; // Total USDC staked (in micro-units)
+  total_stake: number;
 
   @Column('int', { default: 0 })
-  staker_count: number; // Number of unique stakers
+  staker_count: number;
 
   @Column('smallint', { nullable: true })
-  sentiment_score: number | null; // 0-100 after LLM scoring
+  sentiment_score: number | null;
 
   @Column('smallint', { nullable: true })
-  sentiment_confidence: number | null; // 0: low, 1: medium, 2: high
+  sentiment_confidence: number | null;
 
   @Column('bytea', { nullable: true })
-  summary_hash: Buffer | null; // SHA-256 of LLM summary
+  summary_hash: Buffer | null;
 
+  // ── Triple-Check scoring fields ────────────────────────────────────────────
+  /// Volume-weighted mean of all staker predictions (set at settlement)
+  @Column('float', { nullable: true })
+  crowd_score: number | null;
+
+  // ── Legacy settlement fields (kept for backward compatibility) ─────────────
   @Column('varchar', { nullable: true })
-  winner: string | null; // Winner's wallet address (if settled)
+  winner: string | null;
 
   @Column('bigint', { nullable: true })
-  winner_prize: number | null; // Prize amount for winner (in micro-USDC)
+  winner_prize: number | null;
 
   @UpdateDateColumn()
   updated_at: Date;
