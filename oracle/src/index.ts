@@ -112,7 +112,8 @@ class TripleCheckScorer {
 
     for (const op of opinions) {
       const activity = op.amount + op.backing_total + op.slashing_total;
-      weightedSum += (op.prediction || 50) * activity;
+      // Use ?? not || so prediction=0 is treated as 0 (valid), not defaulted to 50
+      weightedSum += (op.prediction ?? 50) * activity;
       totalWeight += activity;
     }
 
@@ -156,7 +157,8 @@ class TripleCheckScorer {
   calculateConsensusScores(opinions: OpinionData[], crowdScore: number): Map<string, number> {
     const scores = new Map<string, number>();
     for (const op of opinions) {
-      const diff = Math.abs((op.prediction || 50) - crowdScore);
+      // Use ?? not || so prediction=0 is treated as 0 (valid), not defaulted to 50
+      const diff = Math.abs((op.prediction ?? 50) - crowdScore);
       const score = Math.max(0, 100 - Math.round(diff));
       scores.set(op.id, score);
     }

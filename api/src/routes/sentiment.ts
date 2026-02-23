@@ -55,7 +55,7 @@ router.get('/sentiment/history', async (req: Request, res: Response) => {
         staker_count: m.staker_count,
         winner: m.winner,
         created_at: m.created_at,
-        closed_at: m.closes_at,
+        closes_at: m.closes_at,
       })),
       pagination: {
         limit: pageLimit,

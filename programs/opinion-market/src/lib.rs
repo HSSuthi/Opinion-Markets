@@ -824,11 +824,8 @@ pub mod opinion_market {
         opinion.payout_amount = payout;
         opinion.paid = true;
 
-        // If this is the highest-earning staker, record as market winner for display
-        let market = &mut ctx.accounts.market;
-        if market.winner.is_none() {
-            market.winner = Some(opinion.staker);
-        }
+        // Triple-Check markets have no single winner — all stakers earn proportionally.
+        // market.winner stays None for markets settled via the Triple-Check path.
 
         emit!(PayoutClaimedEvent {
             market: ctx.accounts.market.key(),
@@ -856,10 +853,12 @@ pub mod opinion_market {
         let total_stake = market.total_stake;
         let protocol_fee = total_stake
             .checked_mul(PROTOCOL_FEE_BPS)
-            .unwrap()
+            .ok_or(OpinionError::Overflow)?
             .checked_div(10_000)
-            .unwrap();
-        let prize_pool = total_stake.checked_sub(protocol_fee).unwrap();
+            .ok_or(OpinionError::Overflow)?;
+        let prize_pool = total_stake
+            .checked_sub(protocol_fee)
+            .ok_or(OpinionError::Overflow)?;
 
         let market_uuid = market.uuid;
         let market_bump = market.bump;

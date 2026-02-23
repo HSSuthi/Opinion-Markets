@@ -14,9 +14,9 @@ import type { Market } from '@/store/marketStore';
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 interface Opinion {
-  staker: string;
+  staker_address: string;
   amount: number;
-  text: string;
+  opinion_text: string | null;
   created_at: string;
 }
 
@@ -144,7 +144,7 @@ export default function ResultsPage() {
           <div className="flex justify-center">
             <SentimentDial
               score={market.sentiment_score || 0}
-              confidence={market.confidence}
+              confidence={market.sentiment_confidence ?? undefined}
               size="lg"
             />
           </div>
@@ -169,9 +169,9 @@ export default function ResultsPage() {
           <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
             <p className="text-xs text-gray-500 mb-2">Confidence</p>
             <p className="text-xl sm:text-2xl font-bold text-purple-400">
-              {market.confidence === 2
+              {market.sentiment_confidence === 2
                 ? 'High'
-                : market.confidence === 1
+                : market.sentiment_confidence === 1
                 ? 'Medium'
                 : 'Low'}
             </p>
@@ -204,7 +204,7 @@ export default function ResultsPage() {
                       <div className="flex justify-between items-start gap-4 mb-2">
                         <div>
                           <p className="text-sm font-semibold text-white">
-                            {truncateAddress(opinion.staker)}
+                            {truncateAddress(opinion.staker_address)}
                           </p>
                           <p className="text-xs text-gray-500">
                             {new Date(
@@ -222,9 +222,9 @@ export default function ResultsPage() {
                         </div>
                       </div>
 
-                      {opinion.text && (
+                      {opinion.opinion_text && (
                         <p className="text-sm text-gray-300 italic border-l-2 border-purple-500 pl-3">
-                          "{opinion.text}"
+                          "{opinion.opinion_text}"
                         </p>
                       )}
                     </div>

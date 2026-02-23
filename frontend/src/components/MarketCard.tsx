@@ -70,6 +70,14 @@ export function MarketCard({ market }: MarketCardProps) {
                 }}
               />
             </div>
+            {market.crowd_score !== null && market.crowd_score !== undefined && (
+              <div className="flex items-center justify-between mt-3">
+                <span className="text-xs text-gray-500">Crowd Score</span>
+                <span className="text-sm font-semibold text-purple-300">
+                  {Number(market.crowd_score).toFixed(1)}
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="mb-6 py-4 border-t border-b border-gray-700">

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { Header } from '@/components/Layout/Header';
 import { SentimentDial } from '@/components/SentimentDial';
 import { formatUSDC, formatTimeRemaining, truncateAddress } from '@/lib/utils/formatting';
@@ -76,12 +77,19 @@ function ReactPanel({
   onSuccess: () => void;
   onClose: () => void;
 }) {
+  const { wallet } = useWallet();
   const [reactionType, setReactionType] = useState<'back' | 'slash'>('back');
   const [amount, setAmount] = useState(1.0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
+    const walletAddress = wallet?.adapter?.publicKey?.toBase58();
+    if (!walletAddress) {
+      setError('Please connect your wallet to react to opinions');
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
     try {
@@ -89,7 +97,7 @@ function ReactPanel({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          reactor: 'demo-wallet', // Replace with actual wallet.publicKey.toBase58()
+          reactor: walletAddress,
           reaction_type: reactionType,
           amount: Math.round(amount * 1_000_000),
         }),
@@ -393,7 +401,7 @@ export default function MarketDetailPage() {
               <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6 mb-6">
                 <SentimentDial
                   score={market.sentiment_score || 0}
-                  confidence={market.confidence}
+                  confidence={market.sentiment_confidence ?? undefined}
                   size="sm"
                   className="w-full"
                 />

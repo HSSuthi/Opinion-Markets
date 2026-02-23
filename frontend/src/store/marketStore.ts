@@ -11,9 +11,10 @@ export interface Market {
   total_stake: number;
   staker_count: number;
   sentiment_score: number | null;
-  confidence: number | null;
+  sentiment_confidence: number | null; // 0=low, 1=medium, 2=high — matches entity field name
   summary_hash?: string;
   crowd_score: number | null; // Volume-weighted mean of all agreement predictions
+  distributable_pool?: number; // Total stake minus protocol fee (set at finalize_settlement)
   winner?: string;
   updated_at: string;
 }

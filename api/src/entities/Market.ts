@@ -62,6 +62,10 @@ export class Market {
   summary_hash: Buffer | null;
 
   // ── Triple-Check scoring fields ────────────────────────────────────────────
+  /// Portion of total_stake available for distribution after protocol fee (set at finalize_settlement)
+  @Column('bigint', { default: 0 })
+  distributable_pool: number;
+
   /// Volume-weighted mean of all staker predictions (set at settlement)
   @Column('float', { nullable: true })
   crowd_score: number | null;

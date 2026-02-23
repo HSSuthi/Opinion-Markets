@@ -70,6 +70,9 @@ export class Opinion {
   @Column('bigint', { nullable: true })
   payout_amount: number | null; // Prize earned in micro-USDC
 
+  @Column('boolean', { default: false })
+  paid: boolean; // True once claim_payout has been processed
+
   // Relations
   @ManyToOne(() => Market, (market) => market.opinions, {
     onDelete: 'CASCADE',

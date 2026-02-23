@@ -62,6 +62,42 @@ export const api = {
       const { data } = await getApiClient().post('/markets', payload);
       return data;
     },
+
+    stake: async (
+      marketId: string,
+      payload: {
+        staker: string;
+        amount: number;
+        opinion_text?: string;
+        prediction?: number;
+        signature?: string;
+      }
+    ) => {
+      const { data } = await getApiClient().post(`/markets/${marketId}/stake`, payload);
+      return data;
+    },
+
+    react: async (
+      marketId: string,
+      opinionId: string,
+      payload: {
+        reactor: string;
+        reaction_type: 'back' | 'slash';
+        amount: number;
+        signature?: string;
+      }
+    ) => {
+      const { data } = await getApiClient().post(
+        `/markets/${marketId}/opinions/${opinionId}/react`,
+        payload
+      );
+      return data;
+    },
+
+    scores: async (marketId: string) => {
+      const { data } = await getApiClient().get(`/markets/${marketId}/scores`);
+      return data;
+    },
   },
 
   opinions: {
@@ -97,6 +133,11 @@ export const api = {
 
     positions: async (wallet: string) => {
       const { data } = await getApiClient().get(`/user/${wallet}/positions`);
+      return data;
+    },
+
+    opinions: async (wallet: string) => {
+      const { data } = await getApiClient().get(`/user/${wallet}/opinions`);
       return data;
     },
   },

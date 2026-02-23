@@ -40,10 +40,34 @@ ALTER TABLE opinions
 ALTER TABLE opinions
   ADD COLUMN IF NOT EXISTS payout_amount   BIGINT;  -- Prize earned in micro-USDC
 
--- ── markets table: crowd_score ───────────────────────────────────────────────
+ALTER TABLE opinions
+  ADD COLUMN IF NOT EXISTS paid            BOOLEAN NOT NULL DEFAULT FALSE; -- True once claimed
+
+-- CHECK constraints: scores must be in valid range
+ALTER TABLE opinions
+  ADD CONSTRAINT IF NOT EXISTS chk_prediction    CHECK (prediction IS NULL OR (prediction >= 0 AND prediction <= 100));
+ALTER TABLE opinions
+  ADD CONSTRAINT IF NOT EXISTS chk_weight_score  CHECK (weight_score IS NULL OR (weight_score >= 0 AND weight_score <= 100));
+ALTER TABLE opinions
+  ADD CONSTRAINT IF NOT EXISTS chk_ai_score      CHECK (ai_score IS NULL OR (ai_score >= 0 AND ai_score <= 100));
+ALTER TABLE opinions
+  ADD CONSTRAINT IF NOT EXISTS chk_consensus_score CHECK (consensus_score IS NULL OR (consensus_score >= 0 AND consensus_score <= 100));
+ALTER TABLE opinions
+  ADD CONSTRAINT IF NOT EXISTS chk_composite_score CHECK (composite_score IS NULL OR (composite_score >= 0 AND composite_score <= 100));
+ALTER TABLE opinions
+  ADD CONSTRAINT IF NOT EXISTS chk_backing_total  CHECK (backing_total >= 0);
+ALTER TABLE opinions
+  ADD CONSTRAINT IF NOT EXISTS chk_slashing_total CHECK (slashing_total >= 0);
+
+-- ── markets table: crowd_score + distributable_pool ──────────────────────────
 
 ALTER TABLE markets
-  ADD COLUMN IF NOT EXISTS crowd_score FLOAT; -- Volume-weighted mean of predictions
+  ADD COLUMN IF NOT EXISTS crowd_score        FLOAT;  -- Volume-weighted mean of predictions
+ALTER TABLE markets
+  ADD COLUMN IF NOT EXISTS distributable_pool BIGINT NOT NULL DEFAULT 0; -- Pool after protocol fee
+
+ALTER TABLE markets
+  ADD CONSTRAINT IF NOT EXISTS chk_crowd_score CHECK (crowd_score IS NULL OR (crowd_score >= 0 AND crowd_score <= 100));
 
 -- ── opinion_reactions table ──────────────────────────────────────────────────
 
