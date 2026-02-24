@@ -1,1 +1,0 @@
-{"version":3,"file":"UserPortfolio.d.ts","sourceRoot":"","sources":["../../src/entities/UserPortfolio.ts"],"names":[],"mappings":"AAQA,qBAEa,aAAa;IAExB,cAAc,EAAE,MAAM,CAAC;IAGvB,YAAY,EAAE,MAAM,CAAC;IAGrB,eAAe,EAAE,MAAM,CAAC;IAGxB,eAAe,EAAE,MAAM,CAAC;IAGxB,SAAS,EAAE,MAAM,CAAC;IAGlB,YAAY,EAAE,IAAI,CAAC;IAGnB,IAAI,QAAQ,IAAI,MAAM,CAErB;IAED,IAAI,GAAG,IAAI,MAAM,CAIhB;CACF"}

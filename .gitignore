@@ -1,7 +1,42 @@
+# Anchor / Solana
 .anchor
-.DS_Store
-target
-**/*.rs.bk
-node_modules
 test-ledger
+**/*.rs.bk
+
+# Build artifacts
+target
+api/dist
+
+# Dependencies
+node_modules
 .yarn
+
+# Environment files — NEVER commit real credentials
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+api/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Keys and secrets
+*.pem
+*.key
+*.p12
+secrets.json
+credentials.json
+oracle.json
+
+# Next.js
+frontend/.next
+frontend/out

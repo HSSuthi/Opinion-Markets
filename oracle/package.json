@@ -29,10 +29,8 @@
     "bull": "^4.11.5",
     "dotenv": "^16.4.5",
     "pino": "^8.19.0",
-    "pino-http": "^9.0.0",
     "pg": "^8.11.3",
     "typeorm": "^0.3.19",
-    "node-fetch": "^2.7.0",
     "axios": "^1.6.5"
   },
   "devDependencies": {

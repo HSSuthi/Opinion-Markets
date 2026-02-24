@@ -20,6 +20,8 @@ import "reflect-metadata";
 
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import * as pino from 'pino';
 import pinoHttp from 'pino-http';
@@ -70,14 +72,40 @@ const app: Express = express();
 
 // Middleware setup
 app.use(httpLogger);
+
+// Security headers
+app.use(helmet());
+
+// CORS — restrict in production
+const corsOrigin = config.nodeEnv === 'production'
+  ? process.env.CORS_ORIGIN  // must be set in production
+  : process.env.CORS_ORIGIN || '*';
+
+if (config.nodeEnv === 'production' && !process.env.CORS_ORIGIN) {
+  logger.warn('CORS_ORIGIN not set — will reject cross-origin requests in production');
+}
+
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: corsOrigin || false,
     credentials: true,
   })
 );
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Rate limiting — 100 requests per minute per IP
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many requests, please try again later' },
+  })
+);
+
+// Body parsing — 1 MB limit (10 MB was excessive for a JSON API)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Custom middleware to attach logger
 app.use((req: ApiRequest, res: ApiResponse, next: NextFunction) => {
@@ -125,13 +153,14 @@ app.use((req: ApiRequest, res: ApiResponse) => {
   });
 });
 
-// Global error handler
+// Global error handler — hide internal details in production
 app.use(
   (error: any, req: ApiRequest, res: ApiResponse, next: NextFunction) => {
     req.logger.error({ error }, 'Unhandled error');
+    const isProduction = config.nodeEnv === 'production';
     res.status(error.status || 500).json({
       success: false,
-      error: error.message || 'Internal server error',
+      error: isProduction ? 'Internal server error' : (error.message || 'Internal server error'),
     });
   }
 );
