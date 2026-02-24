@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { Header } from '@/components/Layout/Header';
 import { useUIStore } from '@/store/uiStore';
 import { formatDate } from '@/lib/utils/formatting';
+import { useOpinionMarket, getExplorerTxUrl, OpinionMarketError } from '@/lib/anchor';
+import { PROGRAM_CONSTANTS } from '@/lib/anchor/program';
+import { getUsdcFaucetUrl } from '@/lib/anchor/config';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -16,20 +19,28 @@ const DURATIONS = [
   { label: '14 Days', value: 1209600, hours: 336 },
 ];
 
-const CREATE_FEE = 5_000_000; // $5.00 in micro-USDC
-
 export default function CreateMarketPage() {
   const router = useRouter();
-  const { wallet } = useWallet();
+  const { publicKey } = useWallet();
   const addToast = useUIStore((s) => s.addToast);
+  const { client, ready, getBalance, faucetUrl } = useOpinionMarket();
 
   const [step, setStep] = useState<Step>('statement');
   const [statement, setStatement] = useState('');
   const [duration, setDuration] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [txHash, setTxHash] = useState<string | null>(null);
+  const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [marketId, setMarketId] = useState<string | null>(null);
+  const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
 
-  if (!wallet) {
+  // Fetch USDC balance when wallet connects
+  useEffect(() => {
+    if (ready && publicKey) {
+      getBalance().then(setUsdcBalance).catch(() => setUsdcBalance(0));
+    }
+  }, [ready, publicKey]);
+
+  if (!publicKey) {
     return (
       <div className="min-h-screen bg-gray-900">
         <Header />
@@ -44,40 +55,54 @@ export default function CreateMarketPage() {
     ? DURATIONS.find((d) => d.value === duration)
     : null;
   const closesAt = duration ? new Date(Date.now() + duration * 1000) : null;
+  const hasEnoughUsdc = usdcBalance !== null && usdcBalance >= PROGRAM_CONSTANTS.CREATE_FEE;
 
   const handleCreate = async () => {
-    if (!statement || !duration) return;
+    if (!statement || !duration || !client) return;
 
     setIsSubmitting(true);
     try {
-      const res = await fetch(`${API_URL}/markets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          statement,
-          duration,
-          creator: wallet.publicKey?.toBase58() || '',
-          signature: 'pending', // Will be replaced by real Solana tx signature
-        }),
-      });
+      // Send the real on-chain transaction
+      const result = await client.createMarket(statement, duration);
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create market');
+      setTxSignature(result.signature);
 
-      setTxHash(data.data?.id || data.id);
+      // Record the market in the API with the real tx signature
+      try {
+        const res = await fetch(`${API_URL}/markets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            statement,
+            duration,
+            creator: publicKey.toBase58(),
+            signature: result.signature,
+            market_pda: result.marketPda.toBase58(),
+            uuid: Buffer.from(result.uuid).toString('hex'),
+          }),
+        });
+
+        const data = await res.json();
+        if (data?.data?.id) {
+          setMarketId(data.data.id);
+        }
+      } catch {
+        // API recording is secondary — the on-chain tx is the source of truth
+        console.warn('Failed to record market in API, but on-chain tx succeeded');
+      }
+
       setStep('confirm');
-
       addToast({
         type: 'success',
-        message: 'Market created successfully!',
+        message: 'Market created on-chain!',
         duration: 5000,
       });
     } catch (error) {
-      addToast({
-        type: 'error',
-        message: (error as Error).message || 'Failed to create market',
-        duration: 5000,
-      });
+      const msg =
+        error instanceof OpinionMarketError
+          ? error.message
+          : (error as Error).message || 'Failed to create market';
+      addToast({ type: 'error', message: msg, duration: 7000 });
     } finally {
       setIsSubmitting(false);
     }
@@ -222,8 +247,32 @@ export default function CreateMarketPage() {
                 <div className="border-t border-gray-600 pt-4">
                   <p className="text-xs text-gray-500 mb-2">Creation Fee</p>
                   <p className="text-lg font-bold text-white">$5.00 USDC</p>
+                  {usdcBalance !== null && (
+                    <p className="text-xs text-gray-400 mt-1">
+                      Your balance: ${(usdcBalance / 1_000_000).toFixed(2)} USDC
+                    </p>
+                  )}
                 </div>
               </div>
+
+              {/* Insufficient USDC warning */}
+              {usdcBalance !== null && !hasEnoughUsdc && (
+                <div className="bg-red-900/30 border border-red-600/50 rounded-lg p-4">
+                  <p className="text-sm text-red-300 mb-2">
+                    Insufficient USDC balance. You need at least $5.00 USDC to create a market.
+                  </p>
+                  {faucetUrl && (
+                    <a
+                      href={faucetUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-blue-400 hover:text-blue-300 underline"
+                    >
+                      Get devnet USDC from the faucet
+                    </a>
+                  )}
+                </div>
+              )}
 
               <div className="flex gap-4">
                 <button
@@ -234,10 +283,10 @@ export default function CreateMarketPage() {
                 </button>
                 <button
                   onClick={handleCreate}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !ready || !hasEnoughUsdc}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all disabled:opacity-50"
                 >
-                  {isSubmitting ? 'Creating...' : 'Create Market'}
+                  {isSubmitting ? 'Creating on-chain...' : 'Create Market ($5 USDC)'}
                 </button>
               </div>
             </div>
@@ -250,17 +299,32 @@ export default function CreateMarketPage() {
 
               <div>
                 <h3 className="text-2xl font-bold text-green-400 mb-2">
-                  Market Created!
+                  Market Created On-Chain!
                 </h3>
                 <p className="text-gray-400 mb-4">
-                  Your market is now live. Users can start staking opinions.
+                  Your market is now live on Solana. Users can start staking opinions.
                 </p>
 
-                {txHash && (
+                {txSignature && (
                   <div className="bg-gray-700/30 border border-gray-600 rounded-lg p-4 mb-6">
-                    <p className="text-xs text-gray-500 mb-1">Transaction Hash</p>
-                    <p className="text-sm font-mono text-purple-400 break-all">
-                      {txHash}
+                    <p className="text-xs text-gray-500 mb-1">Transaction Signature</p>
+                    <a
+                      href={getExplorerTxUrl(txSignature)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-mono text-purple-400 break-all hover:text-purple-300 underline"
+                    >
+                      {txSignature}
+                    </a>
+                    <p className="text-xs text-gray-500 mt-2">
+                      <a
+                        href={getExplorerTxUrl(txSignature)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300"
+                      >
+                        View on Solana Explorer
+                      </a>
                     </p>
                   </div>
                 )}
@@ -296,7 +360,7 @@ export default function CreateMarketPage() {
                   Back to Markets
                 </button>
                 <button
-                  onClick={() => router.push(`/markets/${txHash}`)}
+                  onClick={() => router.push(marketId ? `/markets/${marketId}` : '/')}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all"
                 >
                   View Market

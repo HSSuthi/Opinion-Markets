@@ -70,6 +70,18 @@ export class Opinion {
   @Column('bigint', { nullable: true })
   payout_amount: number | null; // Prize earned in micro-USDC
 
+  @Column('boolean', { default: false })
+  paid: boolean;
+
+  // ── On-chain references ─────────────────────────────────────────────────────
+  /// Solana transaction signature from the on-chain stakeOpinion instruction
+  @Column('varchar', { nullable: true })
+  tx_signature: string | null;
+
+  /// On-chain PDA address for this opinion account
+  @Column('varchar', { nullable: true })
+  opinion_pda: string | null;
+
   // Relations
   @ManyToOne(() => Market, (market) => market.opinions, {
     onDelete: 'CASCADE',

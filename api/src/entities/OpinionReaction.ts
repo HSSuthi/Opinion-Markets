@@ -39,6 +39,13 @@ export class OpinionReaction {
   @CreateDateColumn()
   created_at: Date;
 
+  // ── On-chain references ─────────────────────────────────────────────────────
+  @Column('varchar', { nullable: true })
+  tx_signature: string | null;
+
+  @Column('varchar', { nullable: true })
+  reaction_pda: string | null;
+
   // Relations
   @ManyToOne(() => Opinion, { onDelete: 'CASCADE', eager: false })
   @JoinColumn({ name: 'opinion_id', referencedColumnName: 'id' })

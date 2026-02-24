@@ -120,7 +120,7 @@ router.post('/markets', async (req: Request, res: Response) => {
 
     const market = new Market();
     market.id = `market_${uuidv4()}`;
-    market.uuid = uuidv4();
+    market.uuid = req.body.uuid || uuidv4();
     market.statement = statement;
     market.creator_address = creator;
     market.created_at = new Date();
@@ -128,6 +128,8 @@ router.post('/markets', async (req: Request, res: Response) => {
     market.state = MarketState.ACTIVE;
     market.total_stake = 0;
     market.staker_count = 0;
+    market.tx_signature = signature || null;
+    market.market_pda = req.body.market_pda || null;
 
     const savedMarket = await marketRepository().save(market);
 
@@ -223,6 +225,8 @@ router.post('/markets/:id/stake', async (req: Request, res: Response) => {
     // Author's own stake counts as initial backing for Layer 1
     opinion.backing_total = amount;
     opinion.slashing_total = 0;
+    opinion.tx_signature = signature || null;
+    opinion.opinion_pda = req.body.opinion_pda || null;
 
     const savedOpinion = await opinionRepository().save(opinion);
 
@@ -302,6 +306,8 @@ router.post('/markets/:id/opinions/:opinionId/react', async (req: Request, res: 
     reaction.reactor_address = reactor;
     reaction.reaction_type = reaction_type;
     reaction.amount = amount;
+    reaction.tx_signature = signature || null;
+    reaction.reaction_pda = req.body.reaction_pda || null;
 
     await reactionRepository().save(reaction);
 

@@ -73,6 +73,15 @@ export class Market {
   @Column('bigint', { nullable: true })
   winner_prize: number | null;
 
+  // ── On-chain references ─────────────────────────────────────────────────────
+  /// Solana transaction signature from the on-chain createMarket instruction
+  @Column('varchar', { nullable: true })
+  tx_signature: string | null;
+
+  /// On-chain PDA address for this market account
+  @Column('varchar', { nullable: true })
+  market_pda: string | null;
+
   @UpdateDateColumn()
   updated_at: Date;
 
