@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { Header } from '@/components/Layout/Header';
 import { SentimentDial } from '@/components/SentimentDial';
 import { formatUSDC, formatTimeRemaining, truncateAddress } from '@/lib/utils/formatting';
@@ -68,11 +69,13 @@ function ScoreBar({
 function ReactPanel({
   opinionId,
   marketId,
+  walletAddress,
   onSuccess,
   onClose,
 }: {
   opinionId: string;
   marketId: string;
+  walletAddress: string | null;
   onSuccess: () => void;
   onClose: () => void;
 }) {
@@ -82,6 +85,10 @@ function ReactPanel({
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
+    if (!walletAddress) {
+      setError('Please connect your wallet first');
+      return;
+    }
     setIsSubmitting(true);
     setError(null);
     try {
@@ -89,7 +96,7 @@ function ReactPanel({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          reactor: 'demo-wallet', // Replace with actual wallet.publicKey.toBase58()
+          reactor: walletAddress,
           reaction_type: reactionType,
           amount: Math.round(amount * 1_000_000),
         }),
@@ -183,12 +190,14 @@ function OpinionCard({
   marketId,
   marketState,
   totalStake,
+  walletAddress,
   onReactionSuccess,
 }: {
   opinion: Opinion;
   marketId: string;
   marketState: string;
   totalStake: number;
+  walletAddress: string | null;
   onReactionSuccess: () => void;
 }) {
   const [showReactPanel, setShowReactPanel] = useState(false);
@@ -286,6 +295,7 @@ function OpinionCard({
         <ReactPanel
           opinionId={opinion.id}
           marketId={marketId}
+          walletAddress={walletAddress}
           onSuccess={() => {
             setShowReactPanel(false);
             onReactionSuccess();
@@ -302,6 +312,8 @@ function OpinionCard({
 export default function MarketDetailPage() {
   const router = useRouter();
   const { id } = router.query;
+  const { publicKey } = useWallet();
+  const walletAddress = publicKey?.toBase58() ?? null;
   const setSelectedMarket = useMarketStore((s) => s.setSelectedMarket);
   const [mounted, setMounted] = useState(false);
 
@@ -470,6 +482,7 @@ export default function MarketDetailPage() {
                       marketId={market.id}
                       marketState={market.state}
                       totalStake={Number(market.total_stake)}
+                      walletAddress={walletAddress}
                       onReactionSuccess={() => mutate()}
                     />
                   ))}

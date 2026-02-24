@@ -1,36 +1,42 @@
 import React, { useMemo } from 'react';
 import type { AppProps } from 'next/app';
-import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
+import dynamic from 'next/dynamic';
+import { ConnectionProvider } from '@solana/wallet-adapter-react';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
-import {
-  PhantomWalletAdapter,
-  SolflareWalletAdapter,
-} from '@solana/wallet-adapter-wallets';
 import { clusterApiUrl } from '@solana/web3.js';
-import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { initializeApiClient } from '@/lib/api/client';
-import '@solana/wallet-adapter-react-ui/styles.css';
 import '@/styles/globals.css';
+
+// Dynamically import heavy wallet UI — no SSR, keeps initial bundle small
+const WalletProviderSetup = dynamic(() => import('@/components/WalletProviderSetup'), {
+  ssr: false,
+});
 
 // Initialize API client on app load
 initializeApiClient();
 
-export default function App({ Component, pageProps }: AppProps) {
-  const network = WalletAdapterNetwork.Devnet;
-  const endpoint = useMemo(() => clusterApiUrl(network), []);
+function resolveNetwork(): WalletAdapterNetwork {
+  const env = process.env.NEXT_PUBLIC_NETWORK;
+  if (env === 'mainnet-beta') return WalletAdapterNetwork.Mainnet;
+  if (env === 'testnet') return WalletAdapterNetwork.Testnet;
+  return WalletAdapterNetwork.Devnet;
+}
 
-  const wallets = useMemo(
-    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
-    []
-  );
+export default function App({ Component, pageProps }: AppProps) {
+  const network = resolveNetwork();
+
+  const endpoint = useMemo(() => {
+    // Prefer an explicit RPC URL (e.g. a paid Helius/Quicknode endpoint)
+    const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+    if (rpc && rpc !== 'https://api.devnet.solana.com') return rpc;
+    return clusterApiUrl(network);
+  }, [network]);
 
   return (
     <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>
-          <Component {...pageProps} />
-        </WalletModalProvider>
-      </WalletProvider>
+      <WalletProviderSetup>
+        <Component {...pageProps} />
+      </WalletProviderSetup>
     </ConnectionProvider>
   );
 }

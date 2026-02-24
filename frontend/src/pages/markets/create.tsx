@@ -5,6 +5,8 @@ import { Header } from '@/components/Layout/Header';
 import { useUIStore } from '@/store/uiStore';
 import { formatDate } from '@/lib/utils/formatting';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 type Step = 'statement' | 'duration' | 'review' | 'confirm';
 
 const DURATIONS = [
@@ -48,11 +50,21 @@ export default function CreateMarketPage() {
 
     setIsSubmitting(true);
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const res = await fetch(`${API_URL}/markets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          statement,
+          duration,
+          creator: wallet.publicKey?.toBase58() || '',
+          signature: 'pending', // Will be replaced by real Solana tx signature
+        }),
+      });
 
-      const mockTxHash = `tx_${Math.random().toString(36).substring(7)}`;
-      setTxHash(mockTxHash);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create market');
+
+      setTxHash(data.data?.id || data.id);
       setStep('confirm');
 
       addToast({
