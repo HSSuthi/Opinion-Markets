@@ -326,7 +326,14 @@ export default function MarketDetailPage() {
   const { data: response, error, isLoading, mutate } = useSWR<{ data: MarketDetailsResponse }>(
     id ? `${API_URL}/markets/${id}` : null,
     fetcher,
-    { revalidateOnFocus: false }
+    {
+      revalidateOnFocus: false,
+      // Auto-refresh every 30s while market is active (live sentiment updates)
+      refreshInterval: (data) => {
+        const market = (data as any)?.data ?? data;
+        return market?.state === 'Active' ? 30000 : 0;
+      },
+    }
   );
 
   const market: MarketDetailsResponse | null = (response as any)?.data ?? (response as any) ?? null;
@@ -404,9 +411,10 @@ export default function MarketDetailPage() {
               {/* Sentiment Dial */}
               <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6 mb-6">
                 <SentimentDial
-                  score={market.sentiment_score || 0}
-                  confidence={market.confidence}
+                  score={market.state === 'Active' ? (market.live_sentiment_score || 0) : (market.sentiment_score || 0)}
+                  confidence={market.state === 'Active' ? market.live_sentiment_confidence : market.confidence}
                   size="sm"
+                  isLive={market.state === 'Active'}
                   className="w-full"
                 />
               </div>

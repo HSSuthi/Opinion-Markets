@@ -7,13 +7,21 @@ import { formatDate } from '@/lib/utils/formatting';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-type Step = 'statement' | 'duration' | 'review' | 'confirm';
+type Step = 'statement' | 'duration' | 'stake-cap' | 'review' | 'confirm';
 
 const DURATIONS = [
   { label: '24 Hours', value: 86400, hours: 24 },
   { label: '3 Days', value: 259200, hours: 72 },
   { label: '7 Days', value: 604800, hours: 168 },
   { label: '14 Days', value: 1209600, hours: 336 },
+];
+
+const STAKE_CAPS = [
+  { label: 'Default ($10)', value: 10_000_000, description: 'Twitter-bait markets, casual opinions' },
+  { label: '$50', value: 50_000_000, description: 'More serious staking' },
+  { label: '$100', value: 100_000_000, description: 'High-conviction markets' },
+  { label: '$250', value: 250_000_000, description: 'Institutional interest' },
+  { label: '$500 (Max)', value: 500_000_000, description: 'Maximum depth allowed' },
 ];
 
 const CREATE_FEE = 5_000_000; // $5.00 in micro-USDC
@@ -26,6 +34,7 @@ export default function CreateMarketPage() {
   const [step, setStep] = useState<Step>('statement');
   const [statement, setStatement] = useState('');
   const [duration, setDuration] = useState<number | null>(null);
+  const [maxStake, setMaxStake] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
 
@@ -46,7 +55,7 @@ export default function CreateMarketPage() {
   const closesAt = duration ? new Date(Date.now() + duration * 1000) : null;
 
   const handleCreate = async () => {
-    if (!statement || !duration) return;
+    if (!statement || !duration || !maxStake) return;
 
     setIsSubmitting(true);
     try {
@@ -56,6 +65,7 @@ export default function CreateMarketPage() {
         body: JSON.stringify({
           statement,
           duration,
+          max_stake: maxStake,
           creator: wallet.publicKey?.toBase58() || '',
           signature: 'pending', // Will be replaced by real Solana tx signature
         }),
@@ -91,12 +101,12 @@ export default function CreateMarketPage() {
         {/* Progress indicator */}
         <div className="mb-8">
           <div className="flex justify-between mb-4">
-            {(['statement', 'duration', 'review', 'confirm'] as Step[]).map(
+            {(['statement', 'duration', 'stake-cap', 'review', 'confirm'] as Step[]).map(
               (s, idx) => (
                 <div
                   key={s}
                   className={`flex-1 h-1 mx-1 rounded-full transition-all ${
-                    ['statement', 'duration', 'review', 'confirm'].indexOf(
+                    ['statement', 'duration', 'stake-cap', 'review', 'confirm'].indexOf(
                       step
                     ) >= idx
                       ? 'bg-purple-500'
@@ -107,7 +117,7 @@ export default function CreateMarketPage() {
             )}
           </div>
           <p className="text-sm text-gray-400 text-center">
-            Step {['statement', 'duration', 'review', 'confirm'].indexOf(step) + 1} of 4
+            Step {['statement', 'duration', 'stake-cap', 'review', 'confirm'].indexOf(step) + 1} of 5
           </p>
         </div>
 
@@ -188,8 +198,56 @@ export default function CreateMarketPage() {
                   Back
                 </button>
                 <button
-                  onClick={() => setStep('review')}
+                  onClick={() => setStep('stake-cap')}
                   disabled={!duration}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Stake Cap */}
+          {step === 'stake-cap' && (
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-4">
+                  Maximum Stake Per Opinion/Reaction
+                </label>
+                <p className="text-xs text-gray-500 mb-6">
+                  Set the cap that controls how much participants can stake on individual opinions.
+                  Higher caps attract serious money and depth; lower caps keep the market casual and accessible.
+                </p>
+
+                <div className="space-y-2">
+                  {STAKE_CAPS.map((cap) => (
+                    <button
+                      key={cap.value}
+                      onClick={() => setMaxStake(cap.value)}
+                      className={`w-full p-4 rounded-lg text-left transition-all border ${
+                        maxStake === cap.value
+                          ? 'bg-purple-500/20 border-purple-500 text-white'
+                          : 'bg-gray-700/50 border-gray-600 text-gray-300 hover:border-purple-500'
+                      }`}
+                    >
+                      <div className="font-semibold">{cap.label}</div>
+                      <div className="text-xs text-gray-400 mt-1">{cap.description}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-4">
+                <button
+                  onClick={() => setStep('duration')}
+                  className="flex-1 px-6 py-3 bg-gray-700 text-white rounded-lg font-semibold hover:bg-gray-600 transition-all"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => setStep('review')}
+                  disabled={!maxStake}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all disabled:opacity-50"
                 >
                   Review
@@ -198,7 +256,7 @@ export default function CreateMarketPage() {
             </div>
           )}
 
-          {/* Step 3: Review */}
+          {/* Step 4: Review */}
           {step === 'review' && (
             <div className="space-y-6">
               <div className="bg-gray-700/30 border border-gray-600 rounded-lg p-6 space-y-4">
@@ -220,6 +278,13 @@ export default function CreateMarketPage() {
                 </div>
 
                 <div className="border-t border-gray-600 pt-4">
+                  <p className="text-xs text-gray-500 mb-2">Maximum Stake Per Opinion</p>
+                  <p className="text-lg text-white">
+                    ${(maxStake ? maxStake / 1_000_000 : 0).toFixed(2)} USDC
+                  </p>
+                </div>
+
+                <div className="border-t border-gray-600 pt-4">
                   <p className="text-xs text-gray-500 mb-2">Creation Fee</p>
                   <p className="text-lg font-bold text-white">$5.00 USDC</p>
                 </div>
@@ -227,7 +292,7 @@ export default function CreateMarketPage() {
 
               <div className="flex gap-4">
                 <button
-                  onClick={() => setStep('duration')}
+                  onClick={() => setStep('stake-cap')}
                   className="flex-1 px-6 py-3 bg-gray-700 text-white rounded-lg font-semibold hover:bg-gray-600 transition-all"
                 >
                   Back

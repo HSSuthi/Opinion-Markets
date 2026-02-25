@@ -66,6 +66,24 @@ export class Market {
   @Column('float', { nullable: true })
   crowd_score: number | null;
 
+  // ── Live sentiment fields (updated continuously while market is Active) ─────
+  /// Blended AI + crowd-prediction score computed by the oracle every ~2 min
+  @Column('smallint', { nullable: true })
+  live_sentiment_score: number | null;
+
+  @Column('smallint', { nullable: true })
+  live_sentiment_confidence: number | null;
+
+  /// Timestamp of the last live scoring run (used to debounce oracle calls)
+  @Column('timestamp', { nullable: true })
+  live_scored_at: Date | null;
+
+  // ── Dynamic stake cap (set by creator at market creation) ──────────────────
+  /// Maximum stake per opinion/reaction in micro-USDC.
+  /// Default $10 (10_000_000). Creator may raise to $500 (500_000_000).
+  @Column('bigint', { default: 10_000_000 })
+  max_stake: number;
+
   // ── Legacy settlement fields (kept for backward compatibility) ─────────────
   @Column('varchar', { nullable: true })
   winner: string | null;

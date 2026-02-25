@@ -16,6 +16,12 @@ export interface Market {
   crowd_score: number | null; // Volume-weighted mean of all agreement predictions
   winner?: string;
   updated_at: string;
+  // Live sentiment fields (updated every ~2 min during Active phase)
+  live_sentiment_score: number | null;
+  live_sentiment_confidence: number | null;
+  live_scored_at?: string;
+  // Dynamic stake cap set by creator ($1–$500, default $10)
+  max_stake?: number; // micro-USDC
 }
 
 export interface MarketFilter {

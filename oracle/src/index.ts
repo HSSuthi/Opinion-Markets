@@ -554,6 +554,155 @@ class SettlementCoordinator {
 
 // ── Market Monitor ─────────────────────────────────────────────────────────────
 
+/**
+ * Polls ACTIVE markets every ~2 minutes and computes a blended "live" sentiment score.
+ *
+ * Multi-signal blend:
+ *   - Signal 1: Crowd volume-weighted prediction (0–100)
+ *   - Signal 2: Claude AI sentiment analysis (0–100)
+ *   - Blended: (signal1 + signal2) / 2
+ *
+ * This gives a sentiment that responds to BOTH the crowd's predictions AND the AI's
+ * semantic analysis of opinion texts — more robust than either alone.
+ *
+ * Confidence tier:
+ *   - 0 (low):    < 5 opinions
+ *   - 1 (medium): 5–14 opinions
+ *   - 2 (high):   >= 15 opinions
+ */
+class LiveMarketMonitor {
+  private scorer: TripleCheckScorer;
+  private monitoringInterval: NodeJS.Timeout | null = null;
+  private lastScoredMarkets: Set<string> = new Set(); // Debounce cache
+
+  constructor(scorer: TripleCheckScorer) {
+    this.scorer = scorer;
+  }
+
+  async start(): Promise<void> {
+    logger.info("Live Market Monitor started (scoring active markets every 2 minutes)");
+
+    this.monitoringInterval = setInterval(async () => {
+      try {
+        await this.scoreLiveMarkets();
+      } catch (error: any) {
+        logger.error({ error: error.message }, "Live scoring cycle failed");
+      }
+    }, 120000); // 2 minutes
+  }
+
+  private async scoreLiveMarkets(): Promise<void> {
+    try {
+      const apiUrl = process.env.API_URL || "http://localhost:3001";
+
+      // Fetch active markets with minimal joins (for speed)
+      const response = await fetch(`${apiUrl}/markets?state=Active&limit=100`);
+      if (!response.ok) {
+        logger.warn("Could not fetch active markets");
+        return;
+      }
+
+      const { data: markets } = (await response.json()) as any;
+
+      for (const market of markets || []) {
+        try {
+          // Skip if we scored it very recently (debounce: < 90 seconds ago)
+          if (market.live_scored_at) {
+            const lastScored = new Date(market.live_scored_at).getTime();
+            if (Date.now() - lastScored < 90_000) {
+              continue;
+            }
+          }
+
+          // Skip markets with < 2 opinions (insufficient signal)
+          if (market.staker_count < 2) {
+            continue;
+          }
+
+          // Fetch full market with all opinions
+          const detailRes = await fetch(`${apiUrl}/markets/${market.id}`);
+          if (!detailRes.ok) {
+            continue;
+          }
+
+          const { data: fullMarket } = (await detailRes.json()) as any;
+          const opinions: OpinionData[] = (fullMarket.opinions || []).map(
+            (op: any) => ({
+              id: op.id,
+              staker_address: op.staker_address,
+              amount: Number(op.amount),
+              opinion_text: op.opinion_text || "",
+              prediction: op.prediction ?? 50,
+              backing_total: Number(op.backing_total || op.amount),
+              slashing_total: Number(op.slashing_total || 0),
+            })
+          );
+
+          // ── Two-Signal Blend ──────────────────────────────────────────────
+
+          // Signal 1: Crowd prediction score (volume-weighted, no LLM needed)
+          const crowdScore = this.scorer.calculateCrowdScore(opinions);
+
+          // Signal 2: AI semantic sentiment analysis (Claude)
+          const { score: aiScore } = await this.scorer.analyzeMarketSentiment(
+            fullMarket.statement,
+            opinions
+          );
+
+          // Blend both signals: equal weight on the 0–100 scale
+          const blendedScore = Math.round((crowdScore + aiScore) / 2);
+
+          // Derive confidence from opinion count
+          const opinionCount = opinions.length;
+          let confidence = 0;
+          if (opinionCount >= 15) confidence = 2;
+          else if (opinionCount >= 5) confidence = 1;
+
+          // ── Persist to database ───────────────────────────────────────────
+
+          await fetch(`${apiUrl}/internal/markets/${market.id}/live-sentiment`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              live_sentiment_score: blendedScore,
+              live_sentiment_confidence: confidence,
+            }),
+          });
+
+          logger.debug(
+            {
+              marketId: market.id,
+              crowdSignal: crowdScore.toFixed(1),
+              aiSignal: aiScore.toFixed(1),
+              blended: blendedScore,
+              confidence,
+              opinionCount,
+            },
+            "Live sentiment updated"
+          );
+        } catch (err: any) {
+          logger.warn(
+            { marketId: market.id, error: err.message },
+            "Failed to score market"
+          );
+        }
+      }
+    } catch (error: any) {
+      logger.error({ error: error.message }, "Live market scoring failed");
+    }
+  }
+
+  stop(): void {
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
+      logger.info("Live Market Monitor stopped");
+    }
+  }
+}
+
+// ── Market Monitor (Settlement) ────────────────────────────────────────────────
+
 class MarketMonitor {
   private settlementCoordinator: SettlementCoordinator;
   private monitoringInterval: NodeJS.Timeout | null = null;
@@ -639,21 +788,25 @@ async function main() {
 
     const scorer = new TripleCheckScorer(config.anthropicApiKey);
     const coordinator = new SettlementCoordinator(scorer);
-    const monitor = new MarketMonitor(coordinator);
+    const settlementMonitor = new MarketMonitor(coordinator);
+    const liveMonitor = new LiveMarketMonitor(scorer);
 
-    await monitor.start();
+    await settlementMonitor.start();
+    await liveMonitor.start();
 
-    logger.info("Triple-Check Oracle running. Press Ctrl+C to stop.");
+    logger.info("Triple-Check Oracle running (settlement + live scoring). Press Ctrl+C to stop.");
 
     process.on("SIGINT", async () => {
       logger.info("Shutting down gracefully");
-      monitor.stop();
+      settlementMonitor.stop();
+      liveMonitor.stop();
       process.exit(0);
     });
 
     process.on("SIGTERM", async () => {
       logger.info("SIGTERM received, shutting down");
-      monitor.stop();
+      settlementMonitor.stop();
+      liveMonitor.stop();
       process.exit(0);
     });
   } catch (error: any) {
@@ -664,6 +817,6 @@ async function main() {
 
 main();
 
-export { TripleCheckScorer, SettlementCoordinator, MarketMonitor };
+export { TripleCheckScorer, SettlementCoordinator, MarketMonitor, LiveMarketMonitor };
 // Legacy alias for backward compatibility
 export { TripleCheckScorer as SentimentAnalyzer };
