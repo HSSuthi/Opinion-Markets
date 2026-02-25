@@ -99,11 +99,15 @@ router.get('/markets/:id', async (req: Request, res: Response) => {
 
 /**
  * POST /markets
- * Create a new market
+ * Create a new market.
+ *
+ * Body: { statement, duration, creator, signature, max_stake? }
+ *   max_stake: optional micro-USDC cap per opinion/reaction.
+ *              Default $10 (10_000_000). Range: $1–$500.
  */
 router.post('/markets', async (req: Request, res: Response) => {
   try {
-    const { statement, duration, creator, signature } = req.body;
+    const { statement, duration, creator, signature, max_stake } = req.body;
 
     if (!statement || typeof statement !== 'string') {
       return res.status(400).json({ success: false, error: 'statement is required' });
@@ -118,6 +122,24 @@ router.post('/markets', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'Statement must be 280 characters or less' });
     }
 
+    // Validate optional stake cap (micro-USDC)
+    const MIN_CAP = 1_000_000;    // $1.00
+    const MAX_CAP = 500_000_000;  // $500.00
+    const DEFAULT_CAP = 10_000_000; // $10.00
+    let resolvedMaxStake = DEFAULT_CAP;
+    if (max_stake !== undefined) {
+      if (typeof max_stake !== 'number' || !Number.isInteger(max_stake)) {
+        return res.status(400).json({ success: false, error: 'max_stake must be an integer (micro-USDC)' });
+      }
+      if (max_stake < MIN_CAP || max_stake > MAX_CAP) {
+        return res.status(400).json({
+          success: false,
+          error: `max_stake must be between $1.00 (1_000_000) and $500.00 (500_000_000)`,
+        });
+      }
+      resolvedMaxStake = max_stake;
+    }
+
     const market = new Market();
     market.id = `market_${uuidv4()}`;
     market.uuid = uuidv4();
@@ -128,6 +150,7 @@ router.post('/markets', async (req: Request, res: Response) => {
     market.state = MarketState.ACTIVE;
     market.total_stake = 0;
     market.staker_count = 0;
+    market.max_stake = resolvedMaxStake;
 
     const savedMarket = await marketRepository().save(market);
 
@@ -158,12 +181,24 @@ router.post('/markets/:id/stake', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'amount must be a positive number' });
     }
 
-    const MIN_STAKE = 500_000;
-    const MAX_STAKE = 10_000_000;
-    if (amount < MIN_STAKE || amount > MAX_STAKE) {
+    const MIN_STAKE = 500_000; // $0.50 — global floor, never lower
+
+    const market = await marketRepository().findOne({ where: { id } });
+    if (!market) {
+      return res.status(404).json({ success: false, error: 'Market not found' });
+    }
+    if (market.state !== MarketState.ACTIVE) {
       return res.status(400).json({
         success: false,
-        error: `Stake amount must be between $0.50 and $10.00 (received: $${amount / 1_000_000})`,
+        error: `Market is not active (current state: ${market.state})`,
+      });
+    }
+
+    const marketMaxStake = Number(market.max_stake);
+    if (amount < MIN_STAKE || amount > marketMaxStake) {
+      return res.status(400).json({
+        success: false,
+        error: `Stake amount must be between $0.50 and $${(marketMaxStake / 1_000_000).toFixed(2)} (received: $${(amount / 1_000_000).toFixed(2)})`,
       });
     }
 
@@ -186,17 +221,6 @@ router.post('/markets/:id/stake', async (req: Request, res: Response) => {
           error: 'prediction must be an integer between 0 and 100',
         });
       }
-    }
-
-    const market = await marketRepository().findOne({ where: { id } });
-    if (!market) {
-      return res.status(404).json({ success: false, error: 'Market not found' });
-    }
-    if (market.state !== MarketState.ACTIVE) {
-      return res.status(400).json({
-        success: false,
-        error: `Market is not active (current state: ${market.state})`,
-      });
     }
 
     const existingOpinion = await opinionRepository().findOne({
@@ -259,14 +283,7 @@ router.post('/markets/:id/opinions/:opinionId/react', async (req: Request, res: 
       return res.status(400).json({ success: false, error: 'amount must be a positive number' });
     }
 
-    const MIN_STAKE = 500_000;
-    const MAX_STAKE = 10_000_000;
-    if (amount < MIN_STAKE || amount > MAX_STAKE) {
-      return res.status(400).json({
-        success: false,
-        error: `Reaction stake must be between $0.50 and $10.00`,
-      });
-    }
+    const MIN_STAKE = 500_000; // $0.50 — global floor
 
     const market = await marketRepository().findOne({ where: { id: marketId } });
     if (!market) {
@@ -274,6 +291,14 @@ router.post('/markets/:id/opinions/:opinionId/react', async (req: Request, res: 
     }
     if (market.state !== MarketState.ACTIVE) {
       return res.status(400).json({ success: false, error: 'Market is not open for reactions' });
+    }
+
+    const marketMaxStake = Number(market.max_stake);
+    if (amount < MIN_STAKE || amount > marketMaxStake) {
+      return res.status(400).json({
+        success: false,
+        error: `Reaction stake must be between $0.50 and $${(marketMaxStake / 1_000_000).toFixed(2)}`,
+      });
     }
 
     const opinion = await opinionRepository().findOne({ where: { id: opinionId, market_id: marketId } });
@@ -391,6 +416,86 @@ router.get('/markets/:id/scores', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('GET /markets/:id/scores error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch scores' });
+  }
+});
+
+/**
+ * POST /internal/markets/:id/live-sentiment
+ * Internal endpoint called by the oracle to persist a live sentiment score
+ * for an active market.  Not rate-limited by the public API layer.
+ *
+ * Body: { live_sentiment_score: number, live_sentiment_confidence: number }
+ */
+router.post('/internal/markets/:id/live-sentiment', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { live_sentiment_score, live_sentiment_confidence } = req.body;
+
+    if (
+      typeof live_sentiment_score !== 'number' ||
+      live_sentiment_score < 0 ||
+      live_sentiment_score > 100
+    ) {
+      return res.status(400).json({ success: false, error: 'live_sentiment_score must be 0–100' });
+    }
+
+    const market = await marketRepository().findOne({ where: { id } });
+    if (!market) {
+      return res.status(404).json({ success: false, error: 'Market not found' });
+    }
+
+    market.live_sentiment_score = Math.round(live_sentiment_score);
+    market.live_sentiment_confidence =
+      typeof live_sentiment_confidence === 'number' ? live_sentiment_confidence : null;
+    market.live_scored_at = new Date();
+
+    await marketRepository().save(market);
+
+    res.json({ success: true, data: { live_sentiment_score: market.live_sentiment_score } });
+  } catch (error) {
+    console.error('POST /internal/markets/:id/live-sentiment error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update live sentiment' });
+  }
+});
+
+/**
+ * POST /internal/markets/:id/settle
+ * Internal endpoint called by the oracle to persist final settlement scores.
+ *
+ * Body: { crowd_score, state, opinions: [{ id, weight_score, consensus_score,
+ *          ai_score, composite_score, payout_amount }] }
+ */
+router.post('/internal/markets/:id/settle', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { crowd_score, state, opinions } = req.body;
+
+    const market = await marketRepository().findOne({ where: { id } });
+    if (!market) {
+      return res.status(404).json({ success: false, error: 'Market not found' });
+    }
+
+    if (crowd_score !== undefined) market.crowd_score = crowd_score;
+    if (state) market.state = state as MarketState;
+    await marketRepository().save(market);
+
+    if (Array.isArray(opinions)) {
+      for (const op of opinions) {
+        const opinion = await opinionRepository().findOne({ where: { id: op.id } });
+        if (!opinion) continue;
+        opinion.weight_score = op.weight_score ?? opinion.weight_score;
+        opinion.consensus_score = op.consensus_score ?? opinion.consensus_score;
+        opinion.ai_score = op.ai_score ?? opinion.ai_score;
+        opinion.composite_score = op.composite_score ?? opinion.composite_score;
+        opinion.payout_amount = op.payout_amount ?? opinion.payout_amount;
+        await opinionRepository().save(opinion);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('POST /internal/markets/:id/settle error:', error);
+    res.status(500).json({ success: false, error: 'Failed to settle market' });
   }
 });
 

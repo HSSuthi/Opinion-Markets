@@ -7,6 +7,7 @@ interface SentimentDialProps {
   size?: 'sm' | 'md' | 'lg'; // 200px, 300px, 400px
   animated?: boolean;
   locked?: boolean; // If true, dial is static
+  isLive?: boolean; // Show "LIVE" badge when true
   className?: string;
 }
 
@@ -22,6 +23,7 @@ export function SentimentDial({
   size = 'md',
   animated = true,
   locked = false,
+  isLive = false,
   className = '',
 }: SentimentDialProps) {
   const [displayScore, setDisplayScore] = useState(animated ? 0 : score);
@@ -280,18 +282,26 @@ export function SentimentDial({
         </div>
       </div>
 
-      {/* Confidence indicator */}
-      {confidence !== undefined && (
-        <div className="flex items-center gap-2">
-          <div
-            className="w-3 h-3 rounded-full"
-            style={{ backgroundColor: confidenceColor }}
-          />
-          <span className="text-sm text-gray-300">
-            {CONFIDENCE_LABELS[confidence as keyof typeof CONFIDENCE_LABELS]}
-          </span>
-        </div>
-      )}
+      {/* Confidence indicator + LIVE badge */}
+      <div className="flex items-center gap-4">
+        {confidence !== undefined && (
+          <div className="flex items-center gap-2">
+            <div
+              className="w-3 h-3 rounded-full"
+              style={{ backgroundColor: confidenceColor }}
+            />
+            <span className="text-sm text-gray-300">
+              {CONFIDENCE_LABELS[confidence as keyof typeof CONFIDENCE_LABELS]}
+            </span>
+          </div>
+        )}
+        {isLive && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-red-500/20 border border-red-500/50 rounded-full">
+            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+            <span className="text-xs font-semibold text-red-400">LIVE</span>
+          </div>
+        )}
+      </div>
 
       {/* Legend */}
       <div className="flex gap-6 text-xs text-gray-400 mt-4">

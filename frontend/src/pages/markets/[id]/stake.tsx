@@ -137,11 +137,18 @@ export default function StakePage() {
                   Stake Amount
                 </label>
 
+                {/* Show market cap */}
+                <div className="mb-4 p-3 bg-blue-900/20 border border-blue-700/50 rounded-lg">
+                  <p className="text-xs text-blue-300">
+                    💡 This market's cap: <strong>${((marketData?.max_stake || 10_000_000) / 1_000_000).toFixed(2)}</strong>
+                  </p>
+                </div>
+
                 <div className="mb-6">
                   <input
                     type="range"
                     min="0.5"
-                    max="10"
+                    max={(marketData?.max_stake || 10_000_000) / 1_000_000}
                     step="0.5"
                     value={amount}
                     onChange={(e) => setAmount(parseFloat(e.target.value))}
@@ -149,7 +156,7 @@ export default function StakePage() {
                   />
                   <div className="flex justify-between text-xs text-gray-500 mt-2">
                     <span>$0.50</span>
-                    <span>$10.00</span>
+                    <span>${((marketData?.max_stake || 10_000_000) / 1_000_000).toFixed(2)}</span>
                   </div>
                 </div>
 
@@ -160,20 +167,28 @@ export default function StakePage() {
                   <div className="text-sm text-gray-400">{formatUSDC(amount * 1_000_000)}</div>
                 </div>
 
+                {/* Dynamic presets based on market cap */}
                 <div className="grid grid-cols-4 gap-2">
-                  {[0.5, 1, 5, 10].map((preset) => (
-                    <button
-                      key={preset}
-                      onClick={() => setAmount(preset)}
-                      className={`py-2 px-3 rounded-lg font-medium transition-all ${
-                        amount === preset
-                          ? 'bg-purple-500 text-white'
-                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                      }`}
-                    >
-                      ${preset}
-                    </button>
-                  ))}
+                  {[
+                    0.5,
+                    Math.min(1, (marketData?.max_stake || 10_000_000) / 1_000_000),
+                    Math.min(5, (marketData?.max_stake || 10_000_000) / 1_000_000),
+                    (marketData?.max_stake || 10_000_000) / 1_000_000,
+                  ]
+                    .filter((val, idx, arr) => arr.indexOf(val) === idx) // Remove duplicates
+                    .map((preset) => (
+                      <button
+                        key={preset}
+                        onClick={() => setAmount(preset)}
+                        className={`py-2 px-3 rounded-lg font-medium transition-all ${
+                          Math.abs(amount - preset) < 0.01
+                            ? 'bg-purple-500 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        ${preset.toFixed(2)}
+                      </button>
+                    ))}
                 </div>
               </div>
 
