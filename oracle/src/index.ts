@@ -73,20 +73,26 @@ interface OpinionData {
   staker_address: string;
   amount: number;          // micro-USDC stake
   opinion_text: string;
-  prediction: number;      // 0–100 agreement prediction
+  opinion_score: number;      // NEW: 0–100, user's agreement score → shapes truth
+  market_prediction: number;  // RENAMED from prediction: user's bet on crowd → shapes payout
   backing_total: number;   // total backing from peers
   slashing_total: number;  // total slashing from peers
 }
 
 interface ScoredOpinion extends OpinionData {
   net_backing: number;
-  weight_score: number;    // Layer 1: 0–100
-  ai_score: number;        // Layer 3: 0–100
-  consensus_score: number; // Layer 2: 0–100
-  combined_bps: number;    // 0–10000 (for on-chain precision)
-  combined_score: number;  // 0–100
+  weight_score: number;       // Layer 1: 0–100
+  ai_score: number;           // Layer 3: 0–100
+  prediction_score: number;   // RENAMED from consensus_score: Layer 2: 0–100
+  combined_bps: number;       // 0–10000 (for on-chain precision)
+  combined_score: number;     // 0–100
+  opinion_payout: number;       // NEW: from 70% opinion pool
+  prediction_payout: number;    // NEW: from 24% prediction pool
+  jackpot_eligible: boolean;    // NEW: top 20% closest predictors
+  jackpot_winner: boolean;      // NEW: randomly selected from eligible
+  payout_amount: number;        // opinion_payout + prediction_payout
   payout_share: number;    // 0.0–1.0 fraction of distributable pool
-  payout_amount: number;   // micro-USDC
+  _prediction_weight?: number;  // internal scratch field
 }
 
 // ── Triple-Check Scorer ────────────────────────────────────────────────────────
@@ -101,19 +107,20 @@ class TripleCheckScorer {
   // ── Layer 2: Crowd Score ────────────────────────────────────────────────────
 
   /**
-   * Volume-weighted mean of all agreement predictions.
-   * Users who staked MORE (original + reactions) have more influence.
+   * Volume-weighted mean of all opinion_score values.
+   * Users who staked MORE (original + backing) have more influence.
    *
-   * crowdScore = Σ(prediction_i × total_activity_i) / Σ(total_activity_i)
+   * crowdScore = Σ(opinion_score_i × weight_i) / Σ(weight_i)
+   *   where weight_i = amount_i + backing_total_i
    */
   calculateCrowdScore(opinions: OpinionData[]): number {
     let weightedSum = 0;
     let totalWeight = 0;
 
     for (const op of opinions) {
-      const activity = op.amount + op.backing_total + op.slashing_total;
-      weightedSum += (op.prediction || 50) * activity;
-      totalWeight += activity;
+      const weight = op.amount + op.backing_total;
+      weightedSum += (op.opinion_score ?? 50) * weight;
+      totalWeight += weight;
     }
 
     if (totalWeight === 0) return 50;
@@ -147,16 +154,16 @@ class TripleCheckScorer {
     return scores;
   }
 
-  // ── Layer 2: Consensus Scores ───────────────────────────────────────────────
+  // ── Layer 2: Prediction Scores ──────────────────────────────────────────────
 
   /**
-   * How close was each staker's prediction to the crowd mean?
-   * consensus_i = max(0, 100 - |prediction_i - crowdScore|)
+   * How close was each staker's market_prediction to the crowd score?
+   * prediction_score_i = max(0, 100 - |market_prediction_i - crowdScore|)
    */
-  calculateConsensusScores(opinions: OpinionData[], crowdScore: number): Map<string, number> {
+  calculatePredictionScores(opinions: OpinionData[], crowdScore: number): Map<string, number> {
     const scores = new Map<string, number>();
     for (const op of opinions) {
-      const diff = Math.abs((op.prediction || 50) - crowdScore);
+      const diff = Math.abs((op.market_prediction ?? 50) - crowdScore);
       const score = Math.max(0, 100 - Math.round(diff));
       scores.set(op.id, score);
     }
@@ -313,7 +320,7 @@ Respond in JSON:
 
     // Layer 2
     const crowdScore = this.calculateCrowdScore(opinions);
-    const consensusScores = this.calculateConsensusScores(opinions, crowdScore);
+    const predictionScores = this.calculatePredictionScores(opinions, crowdScore);
 
     // Layer 3
     logger.info("Calling Claude AI to score opinion texts...");
@@ -326,7 +333,7 @@ Respond in JSON:
 
     const scored: ScoredOpinion[] = opinions.map((op) => {
       const W = weightScores.get(op.id) ?? 50;
-      const C = consensusScores.get(op.id) ?? 50;
+      const C = predictionScores.get(op.id) ?? 50;
       const A = aiScores.get(op.id) ?? 50;
 
       // S = W*50 + C*30 + A*20  (integer basis points, range 0–10000)
@@ -337,33 +344,77 @@ Respond in JSON:
         ...op,
         net_backing: Number(op.backing_total) - Number(op.slashing_total),
         weight_score: W,
-        consensus_score: C,
+        prediction_score: C,
         ai_score: A,
         combined_bps,
         combined_score,
-        payout_share: 0, // calculated after
+        opinion_payout: 0,
+        prediction_payout: 0,
+        jackpot_eligible: false,
+        jackpot_winner: false,
+        payout_share: 0,
         payout_amount: 0,
       };
     });
 
-    // Calculate total combined_bps for proportional distribution
-    const totalCombinedBps = scored.reduce((sum, op) => sum + op.combined_bps, 0);
+    // ── Pool splits ──────────────────────────────────────────────────────
+    const opinionPool = Math.floor(distributablePool * 70 / 100);
+    const fullPredictionPool = distributablePool - opinionPool; // 30%
+    const jackpotAmount = Math.floor(fullPredictionPool * 20 / 100); // 6% of total
+    const proportionalPredictionPool = fullPredictionPool - jackpotAmount; // 24% of total
 
-    if (totalCombinedBps === 0) {
-      // Edge case: all scores zero — distribute equally
-      const equalShare = Math.floor(distributablePool / scored.length);
-      scored.forEach((op) => {
-        op.payout_share = 1 / scored.length;
-        op.payout_amount = equalShare;
-      });
-    } else {
-      scored.forEach((op) => {
-        op.payout_share = op.combined_bps / totalCombinedBps;
-        op.payout_amount = Math.floor((op.combined_bps * distributablePool) / totalCombinedBps);
-      });
+    // Opinion payouts — proportional to net backing
+    const netBackings = scored.map(op => Math.max(0, op.net_backing));
+    const totalNetBacking = netBackings.reduce((s, v) => s + v, 0) || 1;
+    scored.forEach((op, i) => {
+      op.opinion_payout = Math.floor(netBackings[i] * opinionPool / totalNetBacking);
+    });
+
+    // Prediction payouts — inverse distance from crowd score
+    scored.forEach(op => {
+      const diff = Math.abs(op.market_prediction - crowdScore);
+      op._prediction_weight = Math.floor(1_000_000 / (diff + 1));
+    });
+    const totalPredictionWeight = scored.reduce((s, op) => s + (op._prediction_weight || 0), 0) || 1;
+    scored.forEach(op => {
+      op.prediction_payout = Math.floor(
+        (op._prediction_weight || 0) * proportionalPredictionPool / totalPredictionWeight
+      );
+    });
+
+    // Jackpot eligibility — top 20% closest to crowd score
+    const sortedByAccuracy = [...scored].sort((a, b) =>
+      Math.abs(a.market_prediction - crowdScore) - Math.abs(b.market_prediction - crowdScore)
+    );
+    const jackpotCutoff = Math.max(1, Math.ceil(sortedByAccuracy.length * 0.2));
+    const eligibleIds = new Set(sortedByAccuracy.slice(0, jackpotCutoff).map(op => op.id));
+    scored.forEach(op => {
+      op.jackpot_eligible = eligibleIds.has(op.id);
+      op.jackpot_winner = false;
+      op.payout_amount = op.opinion_payout + op.prediction_payout;
+    });
+
+    // Select jackpot winner randomly from eligible
+    const eligible = sortedByAccuracy.slice(0, jackpotCutoff);
+    const jackpotWinner = eligible[Math.floor(Math.random() * eligible.length)];
+    if (jackpotWinner) {
+      jackpotWinner.jackpot_winner = true;
     }
 
-    return { crowdScore, scoredOpinions: scored };
+    // Calculate payout shares for reporting
+    const totalPayouts = scored.reduce((s, op) => s + op.payout_amount, 0) || 1;
+    scored.forEach(op => {
+      op.payout_share = op.payout_amount / totalPayouts;
+    });
+
+    return {
+      crowdScore,
+      scoredOpinions: scored,
+      totalNetBacking,
+      totalPredictionWeight,
+      jackpotWinnerAddress: jackpotWinner?.staker_address,
+      jackpotAmount,
+    };
   }
 }
 
@@ -390,12 +441,12 @@ class SettlementCoordinator {
         const { score, confidence, summary } =
           await this.scorer.analyzeMarketSentiment(statement, opinions);
 
-        // Step 2: Compute all three layers
-        const { crowdScore, scoredOpinions } =
+        // Step 2: Compute all three layers + dual pool payouts
+        const { crowdScore, scoredOpinions, totalNetBacking, totalPredictionWeight, jackpotWinnerAddress, jackpotAmount } =
           await this.scorer.computeTripleCheckScores(statement, opinions, totalStake);
 
         // Step 3: Write scores to blockchain
-        await this.writeScoresOnChain(marketId, score, confidence, summary, crowdScore, scoredOpinions);
+        await this.writeScoresOnChain(marketId, score, confidence, summary, crowdScore, scoredOpinions, totalNetBacking, totalPredictionWeight, jackpotWinnerAddress);
 
         // Step 4: Save results to database via API
         await this.persistScoresToDatabase(marketId, crowdScore, scoredOpinions);
@@ -421,6 +472,7 @@ class SettlementCoordinator {
   /**
    * Write all scores on-chain via oracle instructions.
    * Order: record_sentiment → record_ai_score (×N) → settle_opinion (×N) → finalize_settlement
+   *        → claim_payout (×N) → claim_jackpot
    */
   private async writeScoresOnChain(
     marketId: string,
@@ -428,7 +480,10 @@ class SettlementCoordinator {
     confidence: number,
     summary: string,
     crowdScore: number,
-    scoredOpinions: ScoredOpinion[]
+    scoredOpinions: ScoredOpinion[],
+    totalNetBacking: number,
+    totalPredictionWeight: number,
+    jackpotWinnerAddress?: string,
   ): Promise<void> {
     const crypto = require("crypto");
     const summaryHash = crypto.createHash("sha256").update(summary).digest();
@@ -452,7 +507,7 @@ class SettlementCoordinator {
     //
     // 3. for (const op of scoredOpinions) {
     //      await program.methods
-    //        .settleOpinion(Math.round(crowdScore), op.weight_score, op.consensus_score)
+    //        .settleOpinion(Math.round(crowdScore), op.weight_score, op.prediction_score)
     //        .accounts({ oracleAuthority, config, market, opinion: opinionPDA })
     //        .rpc();
     //    }
@@ -461,6 +516,20 @@ class SettlementCoordinator {
     //      .finalizeSettlement()
     //      .accounts({ oracleAuthority, config, market, escrowTokenAccount, treasuryUsdc, tokenProgram })
     //      .rpc();
+    //
+    // 5. for (const op of scoredOpinions) {
+    //      await program.methods
+    //        .claimPayout(new BN(1), new BN(totalNetBacking), new BN(totalPredictionWeight))
+    //        .accounts({ staker, config, market, escrowTokenAccount, opinion: opinionPDA, stakerUsdc, tokenProgram })
+    //        .rpc();
+    //    }
+    //
+    // 6. if (jackpotWinnerAddress) {
+    //      await program.methods
+    //        .claimJackpot(new PublicKey(jackpotWinnerAddress))
+    //        .accounts({ oracleAuthority, config, market, escrowTokenAccount, winnerTokenAccount, tokenProgram })
+    //        .rpc();
+    //    }
 
     logger.info(
       {
@@ -468,6 +537,9 @@ class SettlementCoordinator {
         sentimentScore,
         crowdScore: Math.round(crowdScore),
         opinionCount: scoredOpinions.length,
+        totalNetBacking,
+        totalPredictionWeight,
+        jackpotWinner: jackpotWinnerAddress,
       },
       "On-chain writes complete (devnet: mocked)"
     );
@@ -494,9 +566,13 @@ class SettlementCoordinator {
           opinions: scoredOpinions.map((op) => ({
             id: op.id,
             weight_score: op.weight_score,
-            consensus_score: op.consensus_score,
+            prediction_score: op.prediction_score,
             ai_score: op.ai_score,
             composite_score: op.combined_score,
+            opinion_payout: op.opinion_payout,
+            prediction_payout: op.prediction_payout,
+            jackpot_eligible: op.jackpot_eligible,
+            jackpot_winner: op.jackpot_winner,
             payout_amount: op.payout_amount,
           })),
         }),
@@ -528,27 +604,30 @@ class SettlementCoordinator {
     crowdScore: number,
     opinions: ScoredOpinion[]
   ): void {
-    const sorted = [...opinions].sort((a, b) => b.combined_score - a.combined_score);
+    const sorted = [...opinions].sort((a, b) => b.payout_amount - a.payout_amount);
     const totalPool = opinions.reduce((s, o) => s + o.amount + o.backing_total, 0);
 
-    logger.info(`\n${"═".repeat(80)}`);
-    logger.info(`Triple-Check Settlement Report`);
+    logger.info(`\n${"═".repeat(100)}`);
+    logger.info(`Triple-Check Settlement Report (Dual Pool)`);
     logger.info(`Market: "${statement.substring(0, 70)}"`);
-    logger.info(`Crowd Score (volume-weighted mean): ${crowdScore.toFixed(1)}`);
+    logger.info(`Crowd Score (weighted mean of opinion_scores): ${crowdScore.toFixed(1)}`);
     logger.info(`Total Pool: $${(totalPool / 1_000_000).toFixed(2)} USDC`);
-    logger.info(`${"─".repeat(80)}`);
+    logger.info(`${"─".repeat(100)}`);
 
-    const header = `${"Staker".padEnd(12)} ${"W".padStart(4)} ${"C".padStart(4)} ${"A".padStart(4)} ${"S".padStart(4)} ${"Share%".padStart(7)} ${"Payout".padStart(8)}`;
+    const header = `${"Staker".padEnd(12)} ${"W".padStart(4)} ${"P".padStart(4)} ${"A".padStart(4)} ${"OpPay".padStart(8)} ${"PrPay".padStart(8)} ${"Total".padStart(8)} ${"JP".padStart(3)}`;
     logger.info(header);
 
     for (const op of sorted) {
       const staker = op.staker_address.slice(0, 6) + "..." + op.staker_address.slice(-4);
-      const payout = `$${(op.payout_amount / 1_000_000).toFixed(2)}`;
+      const opPay = `$${(op.opinion_payout / 1_000_000).toFixed(2)}`;
+      const prPay = `$${(op.prediction_payout / 1_000_000).toFixed(2)}`;
+      const total = `$${(op.payout_amount / 1_000_000).toFixed(2)}`;
+      const jp = op.jackpot_winner ? "WIN" : op.jackpot_eligible ? "yes" : " - ";
       logger.info(
-        `${staker.padEnd(12)} ${String(op.weight_score).padStart(4)} ${String(op.consensus_score).padStart(4)} ${String(op.ai_score).padStart(4)} ${String(op.combined_score).padStart(4)} ${(op.payout_share * 100).toFixed(1).padStart(6)}% ${payout.padStart(8)}`
+        `${staker.padEnd(12)} ${String(op.weight_score).padStart(4)} ${String(op.prediction_score).padStart(4)} ${String(op.ai_score).padStart(4)} ${opPay.padStart(8)} ${prPay.padStart(8)} ${total.padStart(8)} ${jp.padStart(3)}`
       );
     }
-    logger.info(`${"═".repeat(80)}`);
+    logger.info(`${"═".repeat(100)}`);
   }
 }
 
@@ -632,7 +711,8 @@ class LiveMarketMonitor {
               staker_address: op.staker_address,
               amount: Number(op.amount),
               opinion_text: op.opinion_text || "",
-              prediction: op.prediction ?? 50,
+              opinion_score: op.opinion_score ?? op.prediction ?? 50,
+              market_prediction: op.market_prediction ?? op.prediction ?? 50,
               backing_total: Number(op.backing_total || op.amount),
               slashing_total: Number(op.slashing_total || 0),
             })
@@ -753,7 +833,8 @@ class MarketMonitor {
             staker_address: op.staker_address,
             amount: Number(op.amount),
             opinion_text: op.opinion_text || "",
-            prediction: op.prediction ?? 50,
+            opinion_score: op.opinion_score ?? op.prediction ?? 50,
+            market_prediction: op.market_prediction ?? op.prediction ?? 50,
             backing_total: Number(op.backing_total || op.amount),
             slashing_total: Number(op.slashing_total || 0),
           }));

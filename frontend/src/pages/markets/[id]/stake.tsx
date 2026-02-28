@@ -9,9 +9,9 @@ import type { Market } from '@/store/marketStore';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-type Step = 'amount' | 'opinion' | 'prediction' | 'review' | 'confirm';
+type Step = 'amount' | 'opinion' | 'score' | 'prediction' | 'review' | 'confirm';
 
-const STEPS: Step[] = ['amount', 'opinion', 'prediction', 'review', 'confirm'];
+const STEPS: Step[] = ['amount', 'opinion', 'score', 'prediction', 'review', 'confirm'];
 
 function getSliderColor(value: number): string {
   if (value < 33) return '#ef4444';  // red — bearish
@@ -38,7 +38,8 @@ export default function StakePage() {
   const [step, setStep] = useState<Step>('amount');
   const [amount, setAmount] = useState(0.5);
   const [opinion, setOpinion] = useState('');
-  const [prediction, setPrediction] = useState(50); // 0–100 agreement prediction
+  const [opinionScore, setOpinionScore] = useState(50); // 0–100 how much user agrees
+  const [marketPrediction, setMarketPrediction] = useState(50); // 0–100 bet on crowd
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
 
@@ -67,7 +68,8 @@ export default function StakePage() {
           staker: wallet.publicKey?.toBase58() || 'demo-wallet',
           amount: Math.round(amount * 1_000_000), // convert to micro-USDC
           opinion_text: opinion,
-          prediction, // Layer 2: crowd consensus prediction
+          opinion_score: opinionScore,
+          market_prediction: marketPrediction,
         }),
       });
 
@@ -242,7 +244,7 @@ export default function StakePage() {
                   ← Back
                 </button>
                 <button
-                  onClick={() => setStep('prediction')}
+                  onClick={() => setStep('score')}
                   disabled={opinion.length < 50}
                   className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -252,32 +254,31 @@ export default function StakePage() {
             </div>
           )}
 
-          {/* ── Step 3: Prediction Slider (NEW) ── */}
-          {step === 'prediction' && (
+          {/* ── Step 3: Your Score (opinion_score) ── */}
+          {step === 'score' && (
             <div className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
-                  🎯 Agreement Prediction
+                  Your Score
                 </label>
                 <p className="text-xs text-gray-500 mb-6">
-                  Predict where the crowd will land (0 = strongly against, 100 = strongly for).
-                  If your prediction is close to the volume-weighted crowd average, your Consensus
-                  Score goes up — worth 30% of your payout.
+                  How much do you agree? (0 = strongly disagree, 100 = strongly agree).
+                  Your score shapes the final Truth Score — the crowd's collective answer.
                 </p>
 
                 {/* Score display */}
                 <div className="text-center mb-6">
                   <div
                     className="text-7xl font-black mb-2 transition-colors"
-                    style={{ color: getSliderColor(prediction) }}
+                    style={{ color: getSliderColor(opinionScore) }}
                   >
-                    {prediction}
+                    {opinionScore}
                   </div>
                   <div
                     className="text-lg font-semibold"
-                    style={{ color: getSliderColor(prediction) }}
+                    style={{ color: getSliderColor(opinionScore) }}
                   >
-                    {getPredictionLabel(prediction)}
+                    {getPredictionLabel(opinionScore)}
                   </div>
                 </div>
 
@@ -288,10 +289,101 @@ export default function StakePage() {
                     min="0"
                     max="100"
                     step="1"
-                    value={prediction}
-                    onChange={(e) => setPrediction(parseInt(e.target.value))}
+                    value={opinionScore}
+                    onChange={(e) => setOpinionScore(parseInt(e.target.value))}
                     className="w-full h-3 rounded-lg appearance-none cursor-pointer"
-                    style={{ accentColor: getSliderColor(prediction) }}
+                    style={{ accentColor: getSliderColor(opinionScore) }}
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-2">
+                    <span>0 — Strongly Disagree</span>
+                    <span>50 — Neutral</span>
+                    <span>100 — Strongly Agree</span>
+                  </div>
+                </div>
+
+                {/* Quick preset buttons */}
+                <div className="grid grid-cols-5 gap-2 mt-4">
+                  {[10, 30, 50, 70, 90].map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setOpinionScore(p)}
+                      className={`py-2 text-sm rounded-lg font-medium transition-all ${
+                        Math.abs(opinionScore - p) < 5
+                          ? 'bg-purple-500 text-white'
+                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-4 p-3 bg-blue-900/20 border border-blue-700/50 rounded-lg">
+                  <p className="text-xs text-blue-300">
+                    <strong>How this works:</strong> Your score combines with other stakers'
+                    scores to form the final Truth Score. This is what the market believes is true.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-4">
+                <button
+                  onClick={() => setStep('opinion')}
+                  className="flex-1 px-6 py-3 bg-gray-700 text-white rounded-lg font-semibold hover:bg-gray-600 transition-all"
+                >
+                  ← Back
+                </button>
+                <button
+                  onClick={() => setStep('prediction')}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 4: Your Prediction (market_prediction) ── */}
+          {step === 'prediction' && (
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Your Prediction
+                </label>
+                <p className="text-xs text-gray-500 mb-2">
+                  Where will the crowd land?
+                </p>
+                <p className="text-xs text-gray-600 mb-6">
+                  Predict the final consensus score — earn more if you're closest.
+                </p>
+
+                {/* Score display */}
+                <div className="text-center mb-6">
+                  <div
+                    className="text-7xl font-black mb-2 transition-colors"
+                    style={{ color: getSliderColor(marketPrediction) }}
+                  >
+                    {marketPrediction}
+                  </div>
+                  <div
+                    className="text-lg font-semibold"
+                    style={{ color: getSliderColor(marketPrediction) }}
+                  >
+                    {getPredictionLabel(marketPrediction)}
+                  </div>
+                </div>
+
+                {/* Slider */}
+                <div className="relative mb-4">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={marketPrediction}
+                    onChange={(e) => setMarketPrediction(parseInt(e.target.value))}
+                    className="w-full h-3 rounded-lg appearance-none cursor-pointer"
+                    style={{ accentColor: getSliderColor(marketPrediction) }}
                   />
                   <div className="flex justify-between text-xs text-gray-500 mt-2">
                     <span>0 — Strongly Against</span>
@@ -305,9 +397,9 @@ export default function StakePage() {
                   {[10, 30, 50, 70, 90].map((p) => (
                     <button
                       key={p}
-                      onClick={() => setPrediction(p)}
+                      onClick={() => setMarketPrediction(p)}
                       className={`py-2 text-sm rounded-lg font-medium transition-all ${
-                        Math.abs(prediction - p) < 5
+                        Math.abs(marketPrediction - p) < 5
                           ? 'bg-purple-500 text-white'
                           : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                       }`}
@@ -319,16 +411,17 @@ export default function StakePage() {
 
                 <div className="mt-4 p-3 bg-purple-900/20 border border-purple-700/50 rounded-lg">
                   <p className="text-xs text-purple-300">
-                    💡 <strong>How this works:</strong> At settlement the protocol calculates the
-                    volume-weighted average of all predictions. Your Consensus Score (30% of payout)
-                    is based on how accurately you predicted that average.
+                    <strong>How this works:</strong> At settlement the protocol calculates the
+                    weighted average of everyone's opinion scores. You earn from the prediction pool
+                    (24% of stakes) based on how close your prediction is to that average.
+                    Top 20% closest predictors also enter the jackpot lottery (6% of stakes).
                   </p>
                 </div>
               </div>
 
               <div className="flex gap-4">
                 <button
-                  onClick={() => setStep('opinion')}
+                  onClick={() => setStep('score')}
                   className="flex-1 px-6 py-3 bg-gray-700 text-white rounded-lg font-semibold hover:bg-gray-600 transition-all"
                 >
                   ← Back
@@ -343,44 +436,54 @@ export default function StakePage() {
             </div>
           )}
 
-          {/* ── Step 4: Review ── */}
+          {/* ── Step 5: Review ── */}
           {step === 'review' && (
             <div className="space-y-6">
               <div className="bg-gray-700/30 border border-gray-600 rounded-lg p-4 space-y-4">
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">💰 Stake Amount</p>
+                  <p className="text-xs text-gray-500 mb-1">Stake Amount</p>
                   <p className="text-2xl font-bold text-white">${amount.toFixed(2)}</p>
                 </div>
 
                 <div className="border-t border-gray-600 pt-4">
-                  <p className="text-xs text-gray-500 mb-2">📝 Your Opinion</p>
+                  <p className="text-xs text-gray-500 mb-2">Your Opinion</p>
                   <p className="text-white italic text-sm">"{opinion}"</p>
                 </div>
 
                 <div className="border-t border-gray-600 pt-4">
-                  <p className="text-xs text-gray-500 mb-1">🎯 Agreement Prediction</p>
+                  <p className="text-xs text-gray-500 mb-1">Your Score (how much you agree)</p>
                   <p
                     className="text-lg font-bold"
-                    style={{ color: getSliderColor(prediction) }}
+                    style={{ color: getSliderColor(opinionScore) }}
                   >
-                    {prediction} — {getPredictionLabel(prediction)}
+                    {opinionScore} — {getPredictionLabel(opinionScore)}
                   </p>
                 </div>
 
                 <div className="border-t border-gray-600 pt-4">
-                  <p className="text-xs text-gray-500 mb-2">📊 Payout Formula</p>
+                  <p className="text-xs text-gray-500 mb-1">Your Prediction (where crowd will land)</p>
+                  <p
+                    className="text-lg font-bold"
+                    style={{ color: getSliderColor(marketPrediction) }}
+                  >
+                    {marketPrediction} — {getPredictionLabel(marketPrediction)}
+                  </p>
+                </div>
+
+                <div className="border-t border-gray-600 pt-4">
+                  <p className="text-xs text-gray-500 mb-2">Payout Pools</p>
                   <div className="text-xs text-gray-400 space-y-1">
                     <div className="flex justify-between">
-                      <span>⚖ Peer Backing (W)</span>
-                      <span className="text-gray-300">50% of score</span>
+                      <span>Opinion Pool (net backing)</span>
+                      <span className="text-gray-300">70% of stakes</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>🎯 Prediction Accuracy (C)</span>
-                      <span className="text-gray-300">30% of score</span>
+                      <span>Prediction Pool (accuracy)</span>
+                      <span className="text-gray-300">24% of stakes</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>🤖 AI Quality (A)</span>
-                      <span className="text-gray-300">20% of score</span>
+                      <span>Jackpot (top 20% predictors)</span>
+                      <span className="text-gray-300">6% of stakes</span>
                     </div>
                   </div>
                 </div>
@@ -404,7 +507,7 @@ export default function StakePage() {
             </div>
           )}
 
-          {/* ── Step 5: Confirmation ── */}
+          {/* ── Step 6: Confirmation ── */}
           {step === 'confirm' && (
             <div className="text-center space-y-6">
               <div className="text-6xl">✅</div>
@@ -412,8 +515,10 @@ export default function StakePage() {
               <div>
                 <h3 className="text-2xl font-bold text-green-400 mb-2">Opinion Staked!</h3>
                 <p className="text-gray-400 mb-4">
-                  Your ${amount.toFixed(2)} stake has been recorded with prediction{' '}
-                  <strong style={{ color: getSliderColor(prediction) }}>{prediction}</strong>.
+                  Your ${amount.toFixed(2)} stake has been recorded with score{' '}
+                  <strong style={{ color: getSliderColor(opinionScore) }}>{opinionScore}</strong>{' '}
+                  and prediction{' '}
+                  <strong style={{ color: getSliderColor(marketPrediction) }}>{marketPrediction}</strong>.
                 </p>
 
                 {txHash && (
@@ -428,7 +533,9 @@ export default function StakePage() {
                   <ul className="text-xs text-gray-400 space-y-1 list-disc list-inside">
                     <li>Other stakers can <strong className="text-green-400">Back</strong> or <strong className="text-red-400">Slash</strong> your opinion</li>
                     <li>When the market closes, the AI Oracle scores your text</li>
-                    <li>Your payout = W×50% + C×30% + A×20%</li>
+                    <li>Opinion pool (70%): paid by net backing you receive</li>
+                    <li>Prediction pool (24%): paid by how close your prediction is</li>
+                    <li>Jackpot (6%): random draw from top 20% predictors</li>
                   </ul>
                 </div>
               </div>

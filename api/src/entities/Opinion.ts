@@ -42,9 +42,13 @@ export class Opinion {
   @CreateDateColumn()
   created_at: Date;
 
-  // ── Layer 2: Crowd Prediction ──────────────────────────────────────────────
-  @Column('smallint', { nullable: true })
-  prediction: number | null; // 0–100 agreement prediction submitted with stake
+  // ── User Agreement Score ──────────────────────────────────────────────────
+  @Column('smallint')
+  opinion_score: number; // 0–100, how much user agrees with statement
+
+  // ── Market Prediction ─────────────────────────────────────────────────────
+  @Column('smallint')
+  market_prediction: number; // 0–100, user's bet on where crowd will land
 
   // ── Layer 1: Peer Backing ──────────────────────────────────────────────────
   @Column('bigint', { default: 0 })
@@ -61,14 +65,27 @@ export class Opinion {
   ai_score: number | null; // Layer 3: AI text quality rating (0–100)
 
   @Column('float', { nullable: true })
-  consensus_score: number | null; // Layer 2: closeness to crowd_score (0–100)
+  prediction_score: number | null; // Layer 2: closeness to crowd_score (0–100)
 
   @Column('float', { nullable: true })
   composite_score: number | null; // Final S = W*50 + C*30 + A*20 (stored 0–100)
 
-  // ── Payout ─────────────────────────────────────────────────────────────────
+  // ── Dual Pool Payouts ─────────────────────────────────────────────────────
   @Column('bigint', { nullable: true })
-  payout_amount: number | null; // Prize earned in micro-USDC
+  opinion_payout: number | null; // Payout from opinion pool (70%)
+
+  @Column('bigint', { nullable: true })
+  prediction_payout: number | null; // Payout from prediction pool (24%)
+
+  @Column('boolean', { default: false })
+  jackpot_eligible: boolean; // In top 20% predictors
+
+  @Column('boolean', { default: false })
+  jackpot_winner: boolean; // Selected as jackpot recipient
+
+  // ── Total Payout ──────────────────────────────────────────────────────────
+  @Column('bigint', { nullable: true })
+  payout_amount: number | null; // opinion_payout + prediction_payout
 
   // Relations
   @ManyToOne(() => Market, (market) => market.opinions, {

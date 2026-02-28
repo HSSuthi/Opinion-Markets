@@ -163,15 +163,16 @@ router.post('/markets', async (req: Request, res: Response) => {
 
 /**
  * POST /markets/:id/stake
- * Submit an opinion stake — now includes an agreement prediction (0–100)
- * for the crowd consensus layer.
+ * Submit an opinion stake with two separate scores:
+ *   - opinion_score (0–100): how much user agrees with the statement (shapes truth)
+ *   - market_prediction (0–100): bet on where the crowd will settle (shapes payout)
  *
- * Body: { staker, amount, opinion_text, prediction, signature }
+ * Body: { staker, amount, opinion_text, opinion_score, market_prediction, signature }
  */
 router.post('/markets/:id/stake', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { staker, amount, opinion_text, prediction, signature } = req.body;
+    const { staker, amount, opinion_text, opinion_score, market_prediction, signature } = req.body;
 
     // Validate required fields
     if (!staker || typeof staker !== 'string') {
@@ -208,19 +209,34 @@ router.post('/markets/:id/stake', async (req: Request, res: Response) => {
       }
     }
 
-    // Validate prediction (Layer 2: crowd consensus)
-    if (prediction !== undefined) {
-      if (
-        typeof prediction !== 'number' ||
-        !Number.isInteger(prediction) ||
-        prediction < 0 ||
-        prediction > 100
-      ) {
-        return res.status(400).json({
-          success: false,
-          error: 'prediction must be an integer between 0 and 100',
-        });
-      }
+    // Validate opinion_score (how much user agrees with the statement)
+    if (
+      opinion_score === undefined ||
+      opinion_score === null ||
+      typeof opinion_score !== 'number' ||
+      !Number.isInteger(opinion_score) ||
+      opinion_score < 0 ||
+      opinion_score > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'opinion_score is required and must be an integer between 0 and 100',
+      });
+    }
+
+    // Validate market_prediction (bet on where crowd will land)
+    if (
+      market_prediction === undefined ||
+      market_prediction === null ||
+      typeof market_prediction !== 'number' ||
+      !Number.isInteger(market_prediction) ||
+      market_prediction < 0 ||
+      market_prediction > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'market_prediction is required and must be an integer between 0 and 100',
+      });
     }
 
     const existingOpinion = await opinionRepository().findOne({
@@ -243,7 +259,8 @@ router.post('/markets/:id/stake', async (req: Request, res: Response) => {
     opinion.opinion_text = opinion_text || null;
     opinion.text_hash = textHash;
     opinion.created_at = new Date();
-    opinion.prediction = prediction !== undefined ? prediction : null;
+    opinion.opinion_score = opinion_score;
+    opinion.market_prediction = market_prediction;
     // Author's own stake counts as initial backing for Layer 1
     opinion.backing_total = amount;
     opinion.slashing_total = 0;
@@ -387,13 +404,18 @@ router.get('/markets/:id/scores', async (req: Request, res: Response) => {
       staker_address: op.staker_address,
       opinion_text: op.opinion_text,
       amount: op.amount,
-      prediction: op.prediction,
+      opinion_score: op.opinion_score,
+      market_prediction: op.market_prediction,
       backing_total: op.backing_total,
       slashing_total: op.slashing_total,
       weight_score: op.weight_score,
-      consensus_score: op.consensus_score,
+      prediction_score: op.prediction_score,
       ai_score: op.ai_score,
       composite_score: op.composite_score,
+      opinion_payout: op.opinion_payout,
+      prediction_payout: op.prediction_payout,
+      jackpot_eligible: op.jackpot_eligible,
+      jackpot_winner: op.jackpot_winner,
       payout_amount: op.payout_amount,
       share_percent:
         totalComposite > 0
@@ -462,8 +484,9 @@ router.post('/internal/markets/:id/live-sentiment', async (req: Request, res: Re
  * POST /internal/markets/:id/settle
  * Internal endpoint called by the oracle to persist final settlement scores.
  *
- * Body: { crowd_score, state, opinions: [{ id, weight_score, consensus_score,
- *          ai_score, composite_score, payout_amount }] }
+ * Body: { crowd_score, state, opinions: [{ id, weight_score, prediction_score,
+ *          ai_score, composite_score, opinion_payout, prediction_payout,
+ *          jackpot_eligible, jackpot_winner, payout_amount }] }
  */
 router.post('/internal/markets/:id/settle', async (req: Request, res: Response) => {
   try {
@@ -484,9 +507,13 @@ router.post('/internal/markets/:id/settle', async (req: Request, res: Response) 
         const opinion = await opinionRepository().findOne({ where: { id: op.id } });
         if (!opinion) continue;
         opinion.weight_score = op.weight_score ?? opinion.weight_score;
-        opinion.consensus_score = op.consensus_score ?? opinion.consensus_score;
+        opinion.prediction_score = op.prediction_score ?? opinion.prediction_score;
         opinion.ai_score = op.ai_score ?? opinion.ai_score;
         opinion.composite_score = op.composite_score ?? opinion.composite_score;
+        opinion.opinion_payout = op.opinion_payout ?? opinion.opinion_payout;
+        opinion.prediction_payout = op.prediction_payout ?? opinion.prediction_payout;
+        opinion.jackpot_eligible = op.jackpot_eligible ?? opinion.jackpot_eligible;
+        opinion.jackpot_winner = op.jackpot_winner ?? opinion.jackpot_winner;
         opinion.payout_amount = op.payout_amount ?? opinion.payout_amount;
         await opinionRepository().save(opinion);
       }

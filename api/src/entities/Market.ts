@@ -84,6 +84,22 @@ export class Market {
   @Column('bigint', { default: 10_000_000 })
   max_stake: number;
 
+  // ── Dual Pool Fields (set at finalize_settlement) ──────────────────────────
+  @Column('bigint', { default: 0 })
+  opinion_pool: number; // 70% of distributable pool
+
+  @Column('bigint', { default: 0 })
+  prediction_pool: number; // 24% of distributable pool
+
+  @Column('bigint', { default: 0 })
+  jackpot_amount: number; // 6% of distributable pool
+
+  @Column('boolean', { default: false })
+  jackpot_claimed: boolean;
+
+  @Column('varchar', { nullable: true })
+  jackpot_winner: string | null;
+
   // ── Legacy settlement fields (kept for backward compatibility) ─────────────
   @Column('varchar', { nullable: true })
   winner: string | null;

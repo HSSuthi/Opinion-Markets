@@ -82,6 +82,10 @@ pub enum OpinionError {
     ZeroTotalScore,
     #[msg("Arithmetic overflow")]
     Overflow,
+    #[msg("Opinion score must be between 0 and 100")]
+    InvalidOpinionScore,
+    #[msg("Jackpot has already been claimed for this market")]
+    JackpotAlreadyClaimed,
 }
 
 // ── State Enums ──────────────────────────────────────────────────────────────
@@ -116,9 +120,17 @@ pub struct OpinionStakedEvent {
     pub market: Pubkey,
     pub staker: Pubkey,
     pub stake_amount: u64,
-    pub prediction: u8,
+    pub opinion_score: u8,
+    pub market_prediction: u8,
     pub ipfs_cid: String,
     pub total_stake_after: u64,
+}
+
+#[event]
+pub struct JackpotClaimedEvent {
+    pub market: Pubkey,
+    pub winner: Pubkey,
+    pub amount: u64,
 }
 
 #[event]
@@ -244,6 +256,17 @@ pub struct Market {
     pub summary_hash: [u8; 32],
     /// Highest-earning staker (set after settlement for display)
     pub winner: Option<Pubkey>,
+
+    // ── Dual Pool Fields (set at finalize_settlement) ─────────────────────
+    /// 70% of distributable_pool — paid proportionally to net backing
+    pub opinion_pool: u64,
+    /// 24% of distributable_pool — paid by inverse distance to crowd_score
+    pub prediction_pool: u64,
+    /// 6% of distributable_pool — lottery for top 20% predictors
+    pub jackpot_amount: u64,
+    /// Guard: jackpot can only be claimed once
+    pub jackpot_claimed: bool,
+
     pub bump: u8,
 }
 
@@ -264,6 +287,10 @@ impl Market {
         + 1   // confidence
         + 32  // summary_hash
         + 1 + 32 // winner: Option<Pubkey>
+        + 8   // opinion_pool
+        + 8   // prediction_pool
+        + 8   // jackpot_amount
+        + 1   // jackpot_claimed
         + 1;  // bump
 }
 
@@ -280,9 +307,13 @@ pub struct Opinion {
     pub ipfs_cid: String,
     pub created_at: i64,
 
-    // ── Layer 2: Crowd Prediction ────────────────────────────────────────────
-    /// User's 0–100 agreement prediction submitted with stake
-    pub prediction: u8,
+    // ── User's Agreement Score ─────────────────────────────────────────────
+    /// 0–100: how much user agrees with the market statement (shapes truth score)
+    pub opinion_score: u8,
+
+    // ── Market Prediction ─────────────────────────────────────────────────
+    /// 0–100: user's bet on where the crowd will settle (shapes payout)
+    pub market_prediction: u8,
 
     // ── Layer 1: Peer Backing ────────────────────────────────────────────────
     /// Total USDC staked to Back (agree with) this opinion
@@ -316,7 +347,8 @@ impl Opinion {
         + 32  // text_hash
         + 4 + MAX_IPFS_CID_LEN // ipfs_cid
         + 8   // created_at
-        + 1   // prediction
+        + 1   // opinion_score
+        + 1   // market_prediction
         + 8   // backing_total
         + 8   // slashing_total
         + 1   // weight_score
@@ -426,6 +458,10 @@ pub mod opinion_market {
         market.confidence = 0;
         market.summary_hash = [0u8; 32];
         market.winner = None;
+        market.opinion_pool = 0;
+        market.prediction_pool = 0;
+        market.jackpot_amount = 0;
+        market.jackpot_claimed = false;
         market.bump = ctx.bumps.market;
 
         emit!(MarketCreatedEvent {
@@ -440,18 +476,22 @@ pub mod opinion_market {
     }
 
     /// Stake a USDC-backed opinion on a market ($0.50–$10).
-    /// Now includes a 0–100 agreement prediction for the crowd consensus layer.
+    /// Accepts two scores:
+    ///   - opinion_score (0–100): how much user agrees with the statement (shapes truth)
+    ///   - market_prediction (0–100): bet on where the crowd will settle (shapes payout)
     pub fn stake_opinion(
         ctx: Context<StakeOpinion>,
         stake_amount: u64,
         text_hash: [u8; 32],
         ipfs_cid: String,
-        prediction: u8,
+        opinion_score: u8,
+        market_prediction: u8,
     ) -> Result<()> {
         require!(stake_amount >= MIN_STAKE, OpinionError::StakeTooSmall);
         require!(stake_amount <= MAX_STAKE, OpinionError::StakeTooLarge);
         require!(ipfs_cid.len() <= MAX_IPFS_CID_LEN, OpinionError::CidTooLong);
-        require!(prediction <= 100, OpinionError::InvalidPrediction);
+        require!(opinion_score <= 100, OpinionError::InvalidOpinionScore);
+        require!(market_prediction <= 100, OpinionError::InvalidPrediction);
 
         let clock = Clock::get()?;
         {
@@ -481,7 +521,8 @@ pub mod opinion_market {
         opinion.text_hash = text_hash;
         opinion.ipfs_cid = ipfs_cid.clone();
         opinion.created_at = clock.unix_timestamp;
-        opinion.prediction = prediction;
+        opinion.opinion_score = opinion_score;
+        opinion.market_prediction = market_prediction;
         // Author's own stake counts as initial backing for Layer 1
         opinion.backing_total = stake_amount;
         opinion.slashing_total = 0;
@@ -502,7 +543,8 @@ pub mod opinion_market {
             market: market_key,
             staker: staker_key,
             stake_amount,
-            prediction,
+            opinion_score,
+            market_prediction,
             ipfs_cid: ipfs_cid_for_event,
             total_stake_after,
         });
@@ -650,13 +692,17 @@ pub mod opinion_market {
         let market = &ctx.accounts.market;
         require!(market.state == MarketState::Scored, OpinionError::MarketNotScored);
 
+        let market_key = ctx.accounts.market.key();
+        let opinion_key = ctx.accounts.opinion.key();
+        let staker_key = ctx.accounts.opinion.staker;
+
         let opinion = &mut ctx.accounts.opinion;
         opinion.ai_score = ai_score;
 
         emit!(AiScoreRecordedEvent {
-            market: ctx.accounts.market.key(),
-            opinion: ctx.accounts.opinion.key(),
-            staker: opinion.staker,
+            market: market_key,
+            opinion: opinion_key,
+            staker: staker_key,
             ai_score,
         });
 
@@ -690,6 +736,11 @@ pub mod opinion_market {
         // Store crowd_score on market — idempotent, same value every call
         market.crowd_score = crowd_score;
 
+        let market_key = ctx.accounts.market.key();
+        let opinion_key = ctx.accounts.opinion.key();
+        let ai_score_val = ctx.accounts.opinion.ai_score;
+        let staker_key = ctx.accounts.opinion.staker;
+
         let opinion = &mut ctx.accounts.opinion;
         opinion.weight_score = weight_score;
         opinion.consensus_score = consensus_score;
@@ -707,22 +758,23 @@ pub mod opinion_market {
             )
             .ok_or(OpinionError::Overflow)?
             .checked_add(
-                (opinion.ai_score as u64)
+                (ai_score_val as u64)
                     .checked_mul(AI_MULTIPLIER)
                     .ok_or(OpinionError::Overflow)?
             )
             .ok_or(OpinionError::Overflow)?;
 
         opinion.combined_score = (combined_bps / 100) as u8;
+        let combined_score_val = opinion.combined_score;
 
         emit!(OpinionSettledEvent {
-            market: ctx.accounts.market.key(),
-            opinion: ctx.accounts.opinion.key(),
-            staker: opinion.staker,
+            market: market_key,
+            opinion: opinion_key,
+            staker: staker_key,
             weight_score,
             consensus_score,
-            ai_score: opinion.ai_score,
-            combined_score: opinion.combined_score,
+            ai_score: ai_score_val,
+            combined_score: combined_score_val,
         });
 
         Ok(())
@@ -763,9 +815,19 @@ pub mod opinion_market {
         );
         token::transfer(fee_cpi, protocol_fee)?;
 
+        // Split distributable pool: 70% opinion, 30% prediction (of which 20% is jackpot)
+        let opinion_pool = distributable_pool * 70 / 100;
+        let full_prediction_pool = distributable_pool - opinion_pool; // 30%
+        let jackpot_amount = full_prediction_pool * 20 / 100;         // 6% of total
+        let prediction_pool = full_prediction_pool - jackpot_amount;  // 24% of total
+
         let market_key = ctx.accounts.market.key();
         let market = &mut ctx.accounts.market;
         market.distributable_pool = distributable_pool;
+        market.opinion_pool = opinion_pool;
+        market.prediction_pool = prediction_pool;
+        market.jackpot_amount = jackpot_amount;
+        market.jackpot_claimed = false;
         market.state = MarketState::Settled;
 
         emit!(MarketFinalizedEvent {
@@ -780,29 +842,49 @@ pub mod opinion_market {
     }
 
     /// Staker claims their proportional payout after settlement.
-    /// payout = (combined_score / total_combined_score) × distributable_pool
+    /// Dual pool payout:
+    ///   - Opinion pool: proportional to net backing received
+    ///   - Prediction pool: inverse distance from crowd score
     ///
-    /// total_combined_score is passed by the oracle (computed off-chain from all opinions).
+    /// Oracle passes total_net_backing and sum_prediction_weights (computed off-chain).
     pub fn claim_payout(
         ctx: Context<ClaimPayout>,
-        total_combined_score: u64,
+        _total_combined_score: u64,   // kept for backward compat, set to 1 if unused
+        total_net_backing: u64,
+        sum_prediction_weights: u64,
     ) -> Result<()> {
         let market = &ctx.accounts.market;
         require!(market.state == MarketState::Settled, OpinionError::MarketNotAwaitingSettlement);
 
         let opinion = &ctx.accounts.opinion;
         require!(!opinion.paid, OpinionError::AlreadyPaid);
-        require!(total_combined_score > 0, OpinionError::ZeroTotalScore);
 
-        let distributable_pool = market.distributable_pool;
-        let combined_score = opinion.combined_score as u64;
+        // Opinion pool payout — proportional to net backing received
+        let net_backing = {
+            let b = opinion.backing_total as i64;
+            let s = opinion.slashing_total as i64;
+            (b - s).max(0) as u64
+        };
+        let opinion_payout = if total_net_backing > 0 {
+            net_backing
+                .checked_mul(market.opinion_pool).ok_or(OpinionError::Overflow)?
+                .checked_div(total_net_backing).ok_or(OpinionError::Overflow)?
+        } else {
+            market.opinion_pool / market.staker_count as u64 // equal split fallback
+        };
 
-        // payout = combined_score × distributable_pool / total_combined_score
-        let payout = combined_score
-            .checked_mul(distributable_pool)
-            .ok_or(OpinionError::Overflow)?
-            .checked_div(total_combined_score)
-            .ok_or(OpinionError::Overflow)?;
+        // Prediction pool payout — inverse distance from crowd score
+        let diff = (opinion.market_prediction as i64 - market.crowd_score as i64).unsigned_abs();
+        let prediction_weight = 1_000_000u64 / (diff + 1);
+        let prediction_payout = if sum_prediction_weights > 0 {
+            prediction_weight
+                .checked_mul(market.prediction_pool).ok_or(OpinionError::Overflow)?
+                .checked_div(sum_prediction_weights).ok_or(OpinionError::Overflow)?
+        } else {
+            0
+        };
+
+        let total_payout = opinion_payout.checked_add(prediction_payout).ok_or(OpinionError::Overflow)?;
 
         let market_uuid = market.uuid;
         let market_bump = market.bump;
@@ -818,24 +900,70 @@ pub mod opinion_market {
             },
             signer_seeds,
         );
-        token::transfer(payout_cpi, payout)?;
+        token::transfer(payout_cpi, total_payout)?;
+
+        let market_key = ctx.accounts.market.key();
+        let opinion_key = ctx.accounts.opinion.key();
+        let staker_key = ctx.accounts.opinion.staker;
+        let combined_score_val = ctx.accounts.opinion.combined_score;
 
         let opinion = &mut ctx.accounts.opinion;
-        opinion.payout_amount = payout;
+        opinion.payout_amount = total_payout;
         opinion.paid = true;
 
         // If this is the highest-earning staker, record as market winner for display
         let market = &mut ctx.accounts.market;
         if market.winner.is_none() {
-            market.winner = Some(opinion.staker);
+            market.winner = Some(staker_key);
         }
 
         emit!(PayoutClaimedEvent {
-            market: ctx.accounts.market.key(),
-            opinion: ctx.accounts.opinion.key(),
-            staker: opinion.staker,
-            payout_amount: payout,
-            combined_score: opinion.combined_score,
+            market: market_key,
+            opinion: opinion_key,
+            staker: staker_key,
+            payout_amount: total_payout,
+            combined_score: combined_score_val,
+        });
+
+        Ok(())
+    }
+
+    /// Oracle claims the jackpot on behalf of the top predictor.
+    /// Can only be called once per market (guarded by jackpot_claimed).
+    pub fn claim_jackpot(ctx: Context<ClaimJackpot>, jackpot_winner: Pubkey) -> Result<()> {
+        let market = &ctx.accounts.market;
+        require!(market.state == MarketState::Settled, OpinionError::MarketNotAwaitingSettlement);
+        require!(!market.jackpot_claimed, OpinionError::JackpotAlreadyClaimed);
+        require!(
+            ctx.accounts.winner_token_account.owner == jackpot_winner,
+            OpinionError::Unauthorized
+        );
+
+        let jackpot = market.jackpot_amount;
+        let market_uuid = market.uuid;
+        let market_bump = market.bump;
+        let seeds: &[&[u8]] = &[b"market", &market_uuid, &[market_bump]];
+        let signer_seeds = &[seeds];
+
+        let jackpot_cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.escrow_token_account.to_account_info(),
+                to: ctx.accounts.winner_token_account.to_account_info(),
+                authority: ctx.accounts.market.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::transfer(jackpot_cpi, jackpot)?;
+
+        let market_key = ctx.accounts.market.key();
+        let market = &mut ctx.accounts.market;
+        market.jackpot_claimed = true;
+
+        emit!(JackpotClaimedEvent {
+            market: market_key,
+            winner: jackpot_winner,
+            amount: jackpot,
         });
 
         Ok(())
@@ -1237,6 +1365,37 @@ pub struct ClaimPayout<'info> {
         constraint = staker_usdc.owner == staker.key(),
     )]
     pub staker_usdc: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimJackpot<'info> {
+    #[account(constraint = oracle_authority.key() == config.oracle_authority @ OpinionError::Unauthorized)]
+    pub oracle_authority: Signer<'info>,
+
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, ProgramConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"market", market.uuid.as_ref()],
+        bump = market.bump,
+    )]
+    pub market: Account<'info, Market>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", market.key().as_ref()],
+        bump,
+    )]
+    pub escrow_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = winner_token_account.mint == config.usdc_mint @ OpinionError::MintMismatch,
+    )]
+    pub winner_token_account: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
 }

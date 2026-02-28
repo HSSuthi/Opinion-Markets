@@ -205,7 +205,9 @@ export class TestUtils {
     marketId: string,
     amount: number,
     opinionText: string = 'bullish',
-    staker: string = this.randomWallet()
+    staker: string = this.randomWallet(),
+    opinionScore: number = 50,
+    marketPrediction: number = 50
   ): Promise<TestOpinion> {
     const response = await this.client.post<ApiResponse<TestOpinion>>(
       `/markets/${marketId}/stake`,
@@ -213,6 +215,8 @@ export class TestUtils {
         staker,
         amount,
         opinion_text: opinionText,
+        opinion_score: opinionScore,
+        market_prediction: marketPrediction,
         signature: 'mock-signature',
       }
     );
@@ -508,6 +512,8 @@ export class TestUtils {
       staker: wallet,
       amount: 3_000_000,
       opinion_text: 'opinion2',
+      opinion_score: 50,
+      market_prediction: 50,
     });
     console.log(
       `   Status: ${opinion2Res.status} (expect 400 - already staked)`

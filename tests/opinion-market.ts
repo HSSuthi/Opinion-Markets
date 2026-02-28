@@ -190,7 +190,7 @@ describe("opinion-market", () => {
       );
 
       await program.methods
-        .stakeOpinion(new BN(amount), textHash, "QmTestCID1234567890ABCDEF1234")
+        .stakeOpinion(new BN(amount), textHash, "QmTestCID1234567890ABCDEF1234", 70, 65)
         .accounts({
           staker: kp.publicKey,
           config: configPda,
@@ -224,7 +224,7 @@ describe("opinion-market", () => {
     );
     try {
       await program.methods
-        .stakeOpinion(new BN(100_000), Array(32).fill(0), "QmTest")
+        .stakeOpinion(new BN(100_000), Array(32).fill(0), "QmTest", 50, 50)
         .accounts({
           staker: staker1.publicKey,
           config: configPda,
@@ -398,7 +398,7 @@ describe("opinion-market", () => {
 
     try {
       await program.methods
-        .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmTest")
+        .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmTest", 50, 50)
         .accounts({
           staker: staker1.publicKey,
           config: configPda,
@@ -525,7 +525,7 @@ describe("opinion-market", () => {
 
     try {
       await program.methods
-        .stakeOpinion(new BN(10_000_001), Array(32).fill(0), "QmTest") // $10.00 + 1
+        .stakeOpinion(new BN(10_000_001), Array(32).fill(0), "QmTest", 50, 50) // $10.00 + 1
         .accounts({
           staker: creator.publicKey,
           config: configPda,
@@ -558,7 +558,7 @@ describe("opinion-market", () => {
 
     try {
       await program.methods
-        .stakeOpinion(new BN(1_000_000), Array(32).fill(0), longCid)
+        .stakeOpinion(new BN(1_000_000), Array(32).fill(0), longCid, 50, 50)
         .accounts({
           staker: treasury.publicKey,
           config: configPda,
@@ -619,7 +619,7 @@ describe("opinion-market", () => {
     );
 
     await program.methods
-      .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmRecovery")
+      .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmRecovery", 50, 50)
       .accounts({
         staker: staker1.publicKey,
         config: configPda,
@@ -716,7 +716,7 @@ describe("opinion-market", () => {
       );
 
     await program.methods
-      .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmRecovery2")
+      .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmRecovery2", 50, 50)
       .accounts({
         staker: staker2.publicKey,
         config: configPda,
@@ -820,7 +820,7 @@ describe("opinion-market", () => {
         );
 
         await program.methods
-          .stakeOpinion(new BN(amount), textHash, "QmVrfOpinion1234")
+          .stakeOpinion(new BN(amount), textHash, "QmVrfOpinion1234", 80, 60)
           .accounts({
             staker: kp.publicKey,
             config: configPda,
@@ -947,7 +947,7 @@ describe("opinion-market", () => {
       );
 
       await program.methods
-        .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmTest")
+        .stakeOpinion(new BN(1_000_000), Array(32).fill(0), "QmTest", 50, 50)
         .accounts({
           staker: staker1.publicKey,
           config: configPda,
